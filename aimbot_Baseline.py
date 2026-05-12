@@ -3,6 +3,7 @@ from pynput.mouse import Controller as MouseController, Listener as MouseListene
 from pynput.keyboard import Listener as KeyboardListener, Key
 from ultralytics import YOLO
 from mss import mss
+import cv2
 import numpy as np
 import sys
 import threading
@@ -17,12 +18,15 @@ print(f"Running on: {device}")
 model.to(device)
 
 # ── Screen info ────────────────────────────────────────────────────────────────
-_sct     = mss()
-_monitor = _sct.monitors[1]
-SCREEN_W = _monitor['width']
-SCREEN_H = _monitor['height']
-CROP_X   = (SCREEN_W - 640) // 2
-CROP_Y   = (SCREEN_H - 640) // 2
+_sct        = mss()
+_monitor    = _sct.monitors[1]
+SCREEN_W    = _monitor['width']
+SCREEN_H    = _monitor['height']
+# Increase CAPTURE_SIZE for more range (covers wider area, scaled to 640 for model)
+# 640 = tight center, 960 = ~50% more range, 1280 = ~100% more range
+CAPTURE_SIZE = min(960, SCREEN_W, SCREEN_H)
+CROP_X      = (SCREEN_W - CAPTURE_SIZE) // 2
+CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 mouse_controller    = MouseController()
@@ -52,13 +56,15 @@ def keyboard_listener_thread():
     with KeyboardListener(on_press=on_key_press) as listener:
         listener.join()
 
-# ── Fast screen capture (numpy, no PIL) ────────────────────────────────────────
+# ── Fast screen capture ────────────────────────────────────────────────────────
 def get_frame():
-    sct_img = _sct.grab(_monitor)
-    img = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(SCREEN_H, SCREEN_W, 4)
-    # Crop center 640x640 and convert BGRA→RGB
-    crop = img[CROP_Y:CROP_Y+640, CROP_X:CROP_X+640, :3][..., ::-1].copy()
-    return crop
+    region = {'left': CROP_X, 'top': CROP_Y, 'width': CAPTURE_SIZE, 'height': CAPTURE_SIZE}
+    sct_img = _sct.grab(region)
+    img = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(CAPTURE_SIZE, CAPTURE_SIZE, 4)
+    rgb = img[..., :3][..., ::-1].copy()   # BGRA → RGB
+    if CAPTURE_SIZE != 640:
+        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
+    return rgb
 
 # ── Detection + aimbot loop ────────────────────────────────────────────────────
 def detection_loop(detect_param):
@@ -88,8 +94,10 @@ def detection_loop(detect_param):
                 dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
                 if dist < best_dist:
                     best_dist = dist
-                    mx = (x_center - 320) / 1.5
-                    my = (y_center - 320) / 1.5
+                    # coords from model are in 640x640 space, scale back to capture size
+                    scale = CAPTURE_SIZE / 640
+                    mx = (x_center - 320) * scale / 1.5
+                    my = (y_center - 320) * scale / 1.5
                     best_move   = (mx, my)
                     should_move = True
 
@@ -122,10 +130,11 @@ class ESPOverlay:
             boxes = list(latest_boxes)
 
         for (x1, y1, x2, y2, conf) in boxes:
-            sx1 = int(x1) + CROP_X
-            sy1 = int(y1) + CROP_Y
-            sx2 = int(x2) + CROP_X
-            sy2 = int(y2) + CROP_Y
+            scale = CAPTURE_SIZE / 640
+            sx1 = int(x1 * scale) + CROP_X
+            sy1 = int(y1 * scale) + CROP_Y
+            sx2 = int(x2 * scale) + CROP_X
+            sy2 = int(y2 * scale) + CROP_Y
             # Filled box with semi-transparent red tint (stipple) + bright outline
             self.canvas.create_rectangle(sx1, sy1, sx2, sy2,
                                          fill='#FF0000', stipple='gray25',
