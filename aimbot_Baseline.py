@@ -18,26 +18,27 @@ mouse_controller = MouseController()
 print("//// LOADING MODEL ////")
 model = YOLO('models/200923_best_yolov8n.pt')
 
+# Use GPU if available for faster inference
+import torch
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Running on: {device}")
+model.to(device)
+
+# Open mss once globally instead of per-frame
+_sct = mss()
+
 def get_results():
-    with mss() as sct:
-        for num, monitor in enumerate(sct.monitors[1:], 1):
-            sct_img = sct.grab(monitor)
+    monitor = _sct.monitors[1]
+    sct_img = _sct.grab(monitor)
 
-            original_image = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-            center_x = (original_image.width - 640) // 2
-            center_y = (original_image.height - 640) // 2
+    original_image = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+    center_x = (original_image.width - 640) // 2
+    center_y = (original_image.height - 640) // 2
 
-            # Define the region to extract
-            left = center_x
-            top = center_y
-            right = center_x + 640
-            bottom = center_y + 640
+    center_region = original_image.crop((center_x, center_y, center_x + 640, center_y + 640))
 
-            center_region = original_image.crop((left, top, right, bottom))
-
-            results = model(center_region)
-
-            return results
+    results = model(center_region, verbose=False)
+    return results
 
 def update_global_variables(results):
     # global move_x, move_y
@@ -50,15 +51,8 @@ def update_global_variables(results):
         confidence = results[0].boxes.conf.item()
         cls = model.names[int(results[0].boxes.cls)]
         
-        print(f"RAW BOX COORDINATES:{x_min, y_min, x_max, y_max}")
-        print(f'CLASS DETECTED: {cls}')
-
-        print(f"CONFIDENCE: {confidence}")
-
         x_center = (x_min + x_max) / 2
         y_center = y_min + 0.1 * (y_max - y_min)
-        box_center = (x_center, y_center)
-        print(f"Center of box coordinates on 640 x 640 image:{box_center}")
         
         # Calculate scaling factors
         scale_x = 1920 / 640
@@ -124,21 +118,18 @@ def mainloop():
             # Your code here, only executed when right mouse button is held down
             start_time = time()
                 
-            # Assuming you have defined get_results() and update_global_variables() functions
             results = get_results()        
             move_x, move_y, confidence, cls = update_global_variables(results)
                 
             if cls == 'avatar':
-                if confidence == None:
+                if confidence is None:
                     pass
                 elif confidence >= detect_param:
                     mouse_controller.move(int(move_x), int(move_y))
                     elapsed_time = time() - start_time
                     sleep(0.01)
-                    print(f"ELAPSED TIME: {elapsed_time}")
-                    print(f"FPS: {round(1/elapsed_time)}")
-            else:
-                sleep(0.00001)
+        else:
+            sleep(0.01)  # idle sleep — prevents CPU spin when not aiming
 
 
 mainloop()
