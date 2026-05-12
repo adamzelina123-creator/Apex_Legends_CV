@@ -22,8 +22,6 @@ SCREEN_W = _monitor['width']
 SCREEN_H = _monitor['height']
 CROP_X   = (SCREEN_W - 640) // 2
 CROP_Y   = (SCREEN_H - 640) // 2
-SCALE_X  = SCREEN_W / 640
-SCALE_Y  = SCREEN_H / 640
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 mouse_controller    = MouseController()
@@ -55,7 +53,7 @@ def detection_loop(detect_param):
     global latest_boxes, running
     while running:
         frame = get_frame()
-        results = model(frame, verbose=False)
+        results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
 
         boxes_detected = []
         best_dist  = float('inf')
@@ -71,18 +69,15 @@ def detection_loop(detect_param):
                 x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
                 boxes_detected.append((x1, y1, x2, y2, conf))
 
-                if conf < detect_param:
-                    continue
-
                 x_center = (x1 + x2) / 2
                 y_center = y1 + 0.1 * (y2 - y1)
 
-                # Pick target closest to crosshair
+                # Pick target closest to crosshair (crop is 1:1 with screen pixels)
                 dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
                 if dist < best_dist:
                     best_dist = dist
-                    mx = (x_center * SCALE_X - SCREEN_W / 2) / 1.61
-                    my = (y_center * SCALE_Y - SCREEN_H / 2) / 1.61
+                    mx = (x_center - 320) / 1.5
+                    my = (y_center - 320) / 1.5
                     best_move   = (mx, my)
                     should_move = True
 
@@ -91,9 +86,6 @@ def detection_loop(detect_param):
 
         if right_click_pressed and should_move:
             mouse_controller.move(int(best_move[0]), int(best_move[1]))
-            sleep(0.01)
-        else:
-            sleep(0.005)
 
 # ── ESP Overlay ────────────────────────────────────────────────────────────────
 class ESPOverlay:
