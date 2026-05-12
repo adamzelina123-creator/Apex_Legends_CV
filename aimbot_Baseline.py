@@ -1,84 +1,38 @@
-from time import time, sleep
-# from utils.weapon_recoil_pattern import *
-# from windowcapture1920x1080 import WindowCapture
-# from windowcapture640x640 import WindowCapture
-from pynput import keyboard
+from time import sleep
 from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
-from datetime import datetime
 from ultralytics import YOLO
-from PIL import Image
 from mss import mss
 import numpy as np
-import cv2 as cv
 import sys
 import threading
+import tkinter as tk
+import torch
 
-mouse_controller = MouseController()
-
+# ── Model ──────────────────────────────────────────────────────────────────────
 print("//// LOADING MODEL ////")
 model = YOLO('models/200923_best_yolov8n.pt')
-
-# Use GPU if available for faster inference
-import torch
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Running on: {device}")
 model.to(device)
 
-# Open mss once globally instead of per-frame
-_sct = mss()
+# ── Screen info ────────────────────────────────────────────────────────────────
+_sct     = mss()
+_monitor = _sct.monitors[1]
+SCREEN_W = _monitor['width']
+SCREEN_H = _monitor['height']
+CROP_X   = (SCREEN_W - 640) // 2
+CROP_Y   = (SCREEN_H - 640) // 2
+SCALE_X  = SCREEN_W / 640
+SCALE_Y  = SCREEN_H / 640
 
-def get_results():
-    monitor = _sct.monitors[1]
-    sct_img = _sct.grab(monitor)
-
-    original_image = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-    center_x = (original_image.width - 640) // 2
-    center_y = (original_image.height - 640) // 2
-
-    center_region = original_image.crop((center_x, center_y, center_x + 640, center_y + 640))
-
-    results = model(center_region, verbose=False)
-    return results
-
-def update_global_variables(results):
-    # global move_x, move_y
-    try:
-        # THIS ONLY TAKES THE FIRS [0] DETECTED CHARACTER - INCLUDE LOGIC TO TAKE IMAGE CLOSEST TO CROSSHAIR
-        x_min = results[0].boxes.xyxy[0][0].item()
-        y_min = results[0].boxes.xyxy[0][1].item()
-        x_max = results[0].boxes.xyxy[0][2].item()
-        y_max = results[0].boxes.xyxy[0][3].item()
-        confidence = results[0].boxes.conf.item()
-        cls = model.names[int(results[0].boxes.cls)]
-        
-        x_center = (x_min + x_max) / 2
-        y_center = y_min + 0.1 * (y_max - y_min)
-        
-        # Calculate scaling factors
-        scale_x = 1920 / 640
-        scale_y = 1080 / 640
-
-        # Translate to coordinates on the 1920x1080 image
-        x_center_1920x1080 = x_center * scale_x
-        y_center_1920x1080 = y_center * scale_y
-
-        move_x = (x_center_1920x1080 - 960) / 1.61
-        move_y = (y_center_1920x1080 - 540) / 1.61
-
-        return move_x , move_y, confidence, cls
-    
-    except:
-        print("NO DETECTION - skipping")
-        move_x = 0
-        move_y = 0
-        confidence = 0
-        cls = None
-
-    return move_x, move_y, confidence, cls
-
-# Global variable to track if right mouse button is held down
+# ── Shared state ───────────────────────────────────────────────────────────────
+mouse_controller    = MouseController()
 right_click_pressed = False
+running             = True
+latest_boxes        = []   # list of (x1, y1, x2, y2, conf)
+boxes_lock          = threading.Lock()
 
+# ── Mouse listener ─────────────────────────────────────────────────────────────
 def on_mouse_press(x, y, button, pressed):
     global right_click_pressed
     if button == Button.right:
@@ -88,49 +42,117 @@ def mouse_listener_thread():
     with MouseListener(on_click=on_mouse_press) as listener:
         listener.join()
 
-def stop_aimbot():
+# ── Fast screen capture (numpy, no PIL) ────────────────────────────────────────
+def get_frame():
+    sct_img = _sct.grab(_monitor)
+    img = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(SCREEN_H, SCREEN_W, 4)
+    # Crop center 640x640 and convert BGRA→RGB
+    crop = img[CROP_Y:CROP_Y+640, CROP_X:CROP_X+640, :3][..., ::-1].copy()
+    return crop
+
+# ── Detection + aimbot loop ────────────────────────────────────────────────────
+def detection_loop(detect_param):
+    global latest_boxes, running
+    while running:
+        frame = get_frame()
+        results = model(frame, verbose=False)
+
+        boxes_detected = []
+        best_dist  = float('inf')
+        best_move  = (0, 0)
+        should_move = False
+
+        if len(results[0].boxes):
+            for i, box in enumerate(results[0].boxes.xyxy):
+                conf     = results[0].boxes.conf[i].item()
+                cls_name = model.names[int(results[0].boxes.cls[i])]
+                if cls_name != 'avatar':
+                    continue
+                x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
+                boxes_detected.append((x1, y1, x2, y2, conf))
+
+                if conf < detect_param:
+                    continue
+
+                x_center = (x1 + x2) / 2
+                y_center = y1 + 0.1 * (y2 - y1)
+
+                # Pick target closest to crosshair
+                dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    mx = (x_center * SCALE_X - SCREEN_W / 2) / 1.61
+                    my = (y_center * SCALE_Y - SCREEN_H / 2) / 1.61
+                    best_move   = (mx, my)
+                    should_move = True
+
+        with boxes_lock:
+            latest_boxes = boxes_detected
+
+        if right_click_pressed and should_move:
+            mouse_controller.move(int(best_move[0]), int(best_move[1]))
+            sleep(0.01)
+        else:
+            sleep(0.005)
+
+# ── ESP Overlay ────────────────────────────────────────────────────────────────
+class ESPOverlay:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title('ESP')
+        self.root.geometry(f'{SCREEN_W}x{SCREEN_H}+0+0')
+        self.root.overrideredirect(True)
+        self.root.wm_attributes('-topmost', True)
+        self.root.wm_attributes('-transparentcolor', 'black')
+        self.root.configure(bg='black')
+        self.canvas = tk.Canvas(self.root, bg='black', highlightthickness=0,
+                                width=SCREEN_W, height=SCREEN_H)
+        self.canvas.pack()
+
+    def update(self):
+        self.canvas.delete('all')
+        with boxes_lock:
+            boxes = list(latest_boxes)
+
+        for (x1, y1, x2, y2, conf) in boxes:
+            sx1 = int(x1) + CROP_X
+            sy1 = int(y1) + CROP_Y
+            sx2 = int(x2) + CROP_X
+            sy2 = int(y2) + CROP_Y
+            # Bounding box
+            self.canvas.create_rectangle(sx1, sy1, sx2, sy2,
+                                         outline='#FF0000', width=2)
+            # Head circle
+            hx = (sx1 + sx2) // 2
+            self.canvas.create_oval(hx - 6, sy1 - 12, hx + 6, sy1,
+                                    outline='#FF0000', width=2)
+            # Confidence label
+            self.canvas.create_text(sx1, sy1 - 14,
+                                    text=f'{conf:.0%}',
+                                    fill='#FF0000',
+                                    font=('Arial', 9, 'bold'),
+                                    anchor='sw')
+
+        self.root.after(16, self.update)   # ~60 fps
+
+    def run(self):
+        self.update()
+        self.root.mainloop()
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+def main():
     global running
-    running = False
-
-
-def mainloop():
     try:
         detect_param = float(sys.argv[1])
-    except:
+    except Exception:
         detect_param = 0.45
 
-    # Create threads for listeners
-    caps_lock_thread = threading.Thread(target=mouse_listener_thread, daemon=True)
+    threading.Thread(target=mouse_listener_thread, daemon=True).start()
+    threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
 
-    # Start the listener threads
-    caps_lock_thread.start()
+    esp = ESPOverlay()
+    esp.run()
 
-    running = True
+    running = False
 
-    previous_frame_time = 0
-    fps_elapsed_time = 0
-    
-    while running:  # Run the main loop continuously
-        if right_click_pressed:
-            
-            fps_elapsed_time = time() - previous_frame_time
-
-            # Your code here, only executed when right mouse button is held down
-            start_time = time()
-                
-            results = get_results()        
-            move_x, move_y, confidence, cls = update_global_variables(results)
-                
-            if cls == 'avatar':
-                if confidence is None:
-                    pass
-                elif confidence >= detect_param:
-                    mouse_controller.move(int(move_x), int(move_y))
-                    elapsed_time = time() - start_time
-                    sleep(0.01)
-        else:
-            sleep(0.01)  # idle sleep — prevents CPU spin when not aiming
-
-
-mainloop()
-sys.exit()
+main()
