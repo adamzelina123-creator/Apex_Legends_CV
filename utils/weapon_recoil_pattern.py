@@ -1,6 +1,8 @@
 from time import time
-import pydirectinput
+from pynput.mouse import Controller as _MouseController
 import random
+
+_mouse = _MouseController()
 
 def weapon_r301(t):
     print(f"TIME: {time()}")
@@ -33,7 +35,7 @@ def weapon_r301(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: R301')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_r99(t):
     time_elapsed = time() - t
@@ -55,7 +57,7 @@ def weapon_r99(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: R99')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 
 def weapon_havoc(t):
@@ -109,7 +111,7 @@ def weapon_havoc(t):
     print(f'TYPE WEAPON: HAVOC')
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: HAVOC')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_flatline(t):
     time_elapsed = time() - t
@@ -163,7 +165,7 @@ def weapon_flatline(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: FLATLINE')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_alternator(t):
     time_elapsed = time() - t
@@ -199,7 +201,7 @@ def weapon_alternator(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: ALTERNATOR')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_volt(t):
     time_elapsed = time() - t
@@ -235,7 +237,7 @@ def weapon_volt(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: VOLT')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_car(t):
     time_elapsed = time() - t
@@ -271,7 +273,7 @@ def weapon_car(t):
     
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: C.A.R.')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_devotion(t):
     time_elapsed = time() - t
@@ -307,7 +309,7 @@ def weapon_devotion(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: DEVOTION')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_lstar(t):
     time_elapsed = time() - t
@@ -331,7 +333,7 @@ def weapon_lstar(t):
     
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: LSTAR')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_spitfire(t):
     time_elapsed = time() - t
@@ -397,7 +399,7 @@ def weapon_spitfire(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: SPITFIRE')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_rampage(t):
     time_elapsed = time() - t
@@ -446,7 +448,7 @@ def weapon_rampage(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: RAMPAGE')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))
 
 def weapon_re45(t):
     time_elapsed = time() - t
@@ -482,4 +484,4 @@ def weapon_re45(t):
 
     print(f'END TIME ELAPSED: {time_elapsed}')
     print(f'TYPE WEAPON: RE45')
-    pydirectinput.move(int(random_number_x), int(random_number_y), relative=True)
+    _mouse.move(int(random_number_x), int(random_number_y))

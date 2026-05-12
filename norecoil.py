@@ -1,10 +1,8 @@
 from pynput import mouse, keyboard
 import threading
 from time import time, sleep
-import pydirectinput
 import random
 from utils.weapon_recoil_pattern import *
-from utils.windowcapture1920x1080 import WindowCapture
 from utils.imagedetect import detect_what_weapon
 
 # in game Sensitivity = 1.61
@@ -13,7 +11,6 @@ from utils.imagedetect import detect_what_weapon
 global detected_weapon
 detected_weapon = detect_what_weapon()
 
-wincap = WindowCapture()
 mouse_buttons_pressed = set()  # Use a set to track pressed mouse buttons
 exit_flag = threading.Event()  # Event to signal the thread to exit
 weapon_lock = threading.Lock()

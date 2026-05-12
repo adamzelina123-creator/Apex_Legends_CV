@@ -2,19 +2,18 @@ from time import time, sleep
 # from utils.weapon_recoil_pattern import *
 # from windowcapture1920x1080 import WindowCapture
 # from windowcapture640x640 import WindowCapture
-from roboflow import Roboflow
 from pynput import keyboard
+from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
 from datetime import datetime
 from ultralytics import YOLO
-import ctypes
 from PIL import Image
-from mss.windows import MSS as mss
+from mss import mss
 import numpy as np
 import cv2 as cv
-from pynput import keyboard
-import ctypes
 import sys
-import threading 
+import threading
+
+mouse_controller = MouseController()
 
 print("//// LOADING MODEL ////")
 model = YOLO('models/200923_best_yolov8n.pt')
@@ -83,29 +82,17 @@ def update_global_variables(results):
 
     return move_x, move_y, confidence, cls
 
-# Global variable to track if the Caps Lock key is held down
-caps_lock_pressed = False
-delete_key_pressed = False
+# Global variable to track if right mouse button is held down
+right_click_pressed = False
 
-# Function to handle Caps Lock key press event
-def on_caps_lock_press(key):
-    global caps_lock_pressed
-    if key == keyboard.Key.caps_lock:
-        caps_lock_pressed = True
+def on_mouse_press(x, y, button, pressed):
+    global right_click_pressed
+    if button == Button.right:
+        right_click_pressed = pressed
 
-# Function to handle Caps Lock key release event
-def on_caps_lock_release(key):
-    global caps_lock_pressed
-    if key == keyboard.Key.caps_lock:
-        caps_lock_pressed = False
-
-
-def caps_lock_listener_thread():
-    caps_lock_listener = keyboard.Listener(
-        on_press=on_caps_lock_press,
-        on_release=on_caps_lock_release
-    )
-    caps_lock_listener.start()
+def mouse_listener_thread():
+    with MouseListener(on_click=on_mouse_press) as listener:
+        listener.join()
 
 def stop_aimbot():
     global running
@@ -119,7 +106,7 @@ def mainloop():
         detect_param = 0.45
 
     # Create threads for listeners
-    caps_lock_thread = threading.Thread(target=caps_lock_listener_thread)
+    caps_lock_thread = threading.Thread(target=mouse_listener_thread, daemon=True)
 
     # Start the listener threads
     caps_lock_thread.start()
@@ -130,12 +117,11 @@ def mainloop():
     fps_elapsed_time = 0
     
     while running:  # Run the main loop continuously
-        if caps_lock_pressed:
+        if right_click_pressed:
             
             fps_elapsed_time = time() - previous_frame_time
 
-            caps_lock_thread.join()
-            # Your code here, only executed when Caps Lock is held down
+            # Your code here, only executed when right mouse button is held down
             start_time = time()
                 
             # Assuming you have defined get_results() and update_global_variables() functions
@@ -146,7 +132,7 @@ def mainloop():
                 if confidence == None:
                     pass
                 elif confidence >= detect_param:
-                    ctypes.windll.user32.mouse_event(0x0001, int(move_x), int(move_y), 0, 0)
+                    mouse_controller.move(int(move_x), int(move_y))
                     elapsed_time = time() - start_time
                     sleep(0.01)
                     print(f"ELAPSED TIME: {elapsed_time}")

@@ -2,14 +2,20 @@ import customtkinter as ctk
 import subprocess
 import tkinter as tk
 import threading
+import sys
 
 global detection_value
 detection_value = 0.49
 
+ab_script_process = None
+nr_script_process = None
+
 def start_ab_script():
     global ab_script_process
     global detection_value
-    ab_script_process = subprocess.Popen(['.venv/Scripts/python', 'aimbot_Baseline.py', f'{detection_value}'])
+    ab_script_process = subprocess.Popen([sys.executable, 'aimbot_Baseline.py', f'{detection_value}'])
+    ab_on_button.configure(fg_color='#00FF00', text_color='#000000')
+    ab_off_button.configure(fg_color='#D488ED', text_color='#550F0F')
 
 # Function to stop the script
 def stop_ab_script():
@@ -18,13 +24,17 @@ def stop_ab_script():
     if ab_script_process and ab_script_process.poll() is None:
         ab_script_process.terminate()
         ab_script_process.wait()
+    ab_on_button.configure(fg_color='#D488ED', text_color='#550F0F')
+    ab_off_button.configure(fg_color='#FF4444', text_color='#000000')
     
     def tst_end():
         print('END')
 
 def start_nr_script():
-    global nr_script_process, nr_output_text
-    nr_script_process = subprocess.Popen(['.venv/Scripts/python', 'norecoil.py'])
+    global nr_script_process
+    nr_script_process = subprocess.Popen([sys.executable, 'norecoil.py'])
+    nr_on_button.configure(fg_color='#00FF00', text_color='#000000')
+    nr_off_button.configure(fg_color='#A8CFB1', text_color='#0D2A02')
 
 def stop_nr_script():
     global nr_script_process
@@ -32,6 +42,8 @@ def stop_nr_script():
     if nr_script_process and nr_script_process.poll() is None:
         nr_script_process.terminate()
         nr_script_process.wait()
+    nr_on_button.configure(fg_color='#A8CFB1', text_color='#0D2A02')
+    nr_off_button.configure(fg_color='#FF4444', text_color='#000000')
 
 def slider_event(self):
     global detection_value
