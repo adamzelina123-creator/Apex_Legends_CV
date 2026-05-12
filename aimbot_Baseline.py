@@ -1,5 +1,6 @@
 from time import sleep
 from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
+from pynput.keyboard import Listener as KeyboardListener, Key
 from ultralytics import YOLO
 from mss import mss
 import numpy as np
@@ -27,6 +28,7 @@ CROP_Y   = (SCREEN_H - 640) // 2
 mouse_controller    = MouseController()
 right_click_pressed = False
 running             = True
+esp_visible         = True   # Toggle with F1
 latest_boxes        = []   # list of (x1, y1, x2, y2, conf)
 boxes_lock          = threading.Lock()
 
@@ -38,6 +40,16 @@ def on_mouse_press(x, y, button, pressed):
 
 def mouse_listener_thread():
     with MouseListener(on_click=on_mouse_press) as listener:
+        listener.join()
+
+# ── Keyboard listener (F1 = toggle ESP) ───────────────────────────────────────
+def on_key_press(key):
+    global esp_visible
+    if key == Key.f1:
+        esp_visible = not esp_visible
+
+def keyboard_listener_thread():
+    with KeyboardListener(on_press=on_key_press) as listener:
         listener.join()
 
 # ── Fast screen capture (numpy, no PIL) ────────────────────────────────────────
@@ -103,6 +115,9 @@ class ESPOverlay:
 
     def update(self):
         self.canvas.delete('all')
+        if not esp_visible:
+            self.root.after(16, self.update)
+            return
         with boxes_lock:
             boxes = list(latest_boxes)
 
@@ -140,7 +155,9 @@ def main():
         detect_param = 0.45
 
     threading.Thread(target=mouse_listener_thread, daemon=True).start()
+    threading.Thread(target=keyboard_listener_thread, daemon=True).start()
     threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
+    print("ESP ON  — press F1 to toggle overlay")
 
     esp = ESPOverlay()
     esp.run()
