@@ -126,18 +126,22 @@ class ESPOverlay:
             sy1 = int(y1) + CROP_Y
             sx2 = int(x2) + CROP_X
             sy2 = int(y2) + CROP_Y
-            # Bounding box
+            # Filled box with semi-transparent red tint (stipple) + bright outline
             self.canvas.create_rectangle(sx1, sy1, sx2, sy2,
-                                         outline='#FF0000', width=2)
+                                         fill='#FF0000', stipple='gray25',
+                                         outline='#FF0000', width=4)
+            # Bright white inner outline for contrast
+            self.canvas.create_rectangle(sx1+4, sy1+4, sx2-4, sy2-4,
+                                         outline='#FFFFFF', width=1)
             # Head circle
             hx = (sx1 + sx2) // 2
-            self.canvas.create_oval(hx - 6, sy1 - 12, hx + 6, sy1,
-                                    outline='#FF0000', width=2)
+            self.canvas.create_oval(hx - 8, sy1 - 16, hx + 8, sy1,
+                                    fill='#FF0000', outline='#FFFFFF', width=2)
             # Confidence label
-            self.canvas.create_text(sx1, sy1 - 14,
+            self.canvas.create_text(sx1, sy1 - 18,
                                     text=f'{conf:.0%}',
-                                    fill='#FF0000',
-                                    font=('Arial', 9, 'bold'),
+                                    fill='#FFFFFF',
+                                    font=('Arial', 10, 'bold'),
                                     anchor='sw')
 
         self.root.after(16, self.update)   # ~60 fps
