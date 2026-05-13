@@ -335,11 +335,12 @@ def main():
     threading.Thread(target=mouse_listener_thread, daemon=True).start()
     threading.Thread(target=keyboard_listener_thread, daemon=True).start()
     threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
-    print("ESP ON  — press F1 to toggle overlay")
-
-    esp = ESPOverlay()
-    esp.run()
-
-    running = False
+    print("Aimbot running — no overlay drawing")
+    
+    try:
+        while running:
+            sleep(1)
+    except KeyboardInterrupt:
+        running = False
 
 main()
