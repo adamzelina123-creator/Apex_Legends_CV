@@ -262,14 +262,11 @@ def detection_loop(detect_param):
 
         if (right_click_pressed or left_click_pressed) and should_move and target is not None:
             if just_clicked and best_target_screen is not None:
-                # First frame of click: warp crosshair directly to head
+                # Snap to head on first click only
                 scale  = CAPTURE_SIZE / 640
                 snap_x = round((target[0] - 320) * scale / AIM_SENSITIVITY)
                 snap_y = round((target[1] - 320) * scale / AIM_SENSITIVITY)
                 mouse_controller.move(snap_x, snap_y)
-            else:
-                dx, dy = round(best_move[0]), round(best_move[1])
-                mouse_controller.move(dx, dy)
 
         # Cap detection rate — keeps GPU headroom for the game
         elapsed = perf_counter() - t0
