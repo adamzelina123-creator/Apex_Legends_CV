@@ -62,7 +62,8 @@ def main():
     PREVIEW_DIR.mkdir(exist_ok=True)
     saved = 0
 
-    for img_path in images:
+    print(f'Found {len(images)} images. Processing …')
+    for i, img_path in enumerate(images, 1):
         txt_path = img_path.with_suffix('.txt')
         preview  = draw_labels(img_path, txt_path)
         if preview is None:
@@ -70,6 +71,8 @@ def main():
         out_path = PREVIEW_DIR / img_path.name
         cv2.imwrite(str(out_path), preview)
         saved += 1
+        if i % 20 == 0 or i == len(images):
+            print(f'  {i}/{len(images)} done …')
 
     print(f'Saved {saved} preview images to "{PREVIEW_DIR.resolve()}"')
     print('Open that folder in Windows Explorer to check the green boxes.')
