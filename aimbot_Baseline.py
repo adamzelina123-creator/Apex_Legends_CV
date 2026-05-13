@@ -120,13 +120,12 @@ def get_frame():
     img = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(CAPTURE_SIZE, CAPTURE_SIZE, 4)
     rgb = img[..., :3][..., ::-1].copy()   # BGRA → RGB
     if CAPTURE_SIZE != 640:
-        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_NEAREST)
     return rgb
 
 # ── Detection + aimbot loop ────────────────────────────────────────────────────
-# Run as fast as the GPU allows — no artificial FPS cap.
-# The game loop is the bottleneck; saturating detection only helps accuracy.
-DETECT_FPS    = 60
+# Run at 30 FPS to reduce GPU load while maintaining responsive aiming.
+DETECT_FPS    = 30
 DETECT_PERIOD = 1.0 / DETECT_FPS
 
 def detection_loop(detect_param):
@@ -292,15 +291,20 @@ class ESPOverlay:
         self.canvas.pack()
 
     def update(self):
-        self.canvas.delete('all')
         if not esp_visible:
-            self.root.after(16, self.update)
+            self.root.after(100, self.update)
             return
+        
+        self.canvas.delete('all')
         with boxes_lock:
             boxes = list(latest_boxes)
 
+        if not boxes:
+            self.root.after(100, self.update)
+            return
+
+        scale = CAPTURE_SIZE / 640
         for (x1, y1, x2, y2, conf) in boxes:
-            scale = CAPTURE_SIZE / 640
             sx1 = int(x1 * scale) + CROP_X
             sy1 = int(y1 * scale) + CROP_Y
             sx2 = int(x2 * scale) + CROP_X
@@ -309,35 +313,12 @@ class ESPOverlay:
             cx     = (sx1 + sx2) // 2
             head_y = sy1 + int((sy2 - sy1) * AIM_HEAD_BIAS)
 
-            # ── Body line ────────────────────────────────────────────────────
-            self.canvas.create_line(cx, sy2, cx, head_y,
-                                    fill='#FF2200', width=1, dash=(4, 4))
-
-            # ── Head glow: 2 rings only to reduce GPU load ────────────────
-            self.canvas.create_oval(cx - 16, head_y - 16,
-                                    cx + 16, head_y + 16,
-                                    outline='#880000', width=3, fill='')
-            self.canvas.create_oval(cx - 7, head_y - 7,
-                                    cx + 7, head_y + 7,
+            # ── Head dot only (minimal draw) ────────────────────────────────
+            self.canvas.create_oval(cx - 4, head_y - 4,
+                                    cx + 4, head_y + 4,
                                     outline='#FF4400', width=2, fill='')
-            self.canvas.create_oval(cx - 2, head_y - 2,
-                                    cx + 2, head_y + 2,
-                                    fill='#FFFFFF', outline='')
 
-        # ── Aim crosshair: only visible while right-clicking (ADS) ───────────
-        if right_click_pressed:
-            with boxes_lock:
-                aim = latest_aim_target
-            if aim:
-                tx, ty = aim
-                self.canvas.create_line(tx - 10, ty, tx + 10, ty,
-                                        fill='#00FF88', width=1)
-                self.canvas.create_line(tx, ty - 10, tx, ty + 10,
-                                        fill='#00FF88', width=1)
-                self.canvas.create_oval(tx - 4, ty - 4, tx + 4, ty + 4,
-                                        outline='#00FF88', width=1, fill='')
-
-        self.root.after(50, self.update)   # 20 fps — reduces game lag
+        self.root.after(100, self.update)   # 10 fps — minimal load
 
     def run(self):
         self.update()
