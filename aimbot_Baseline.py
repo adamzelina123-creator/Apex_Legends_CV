@@ -13,7 +13,7 @@ import torch
 
 # ── Model ──────────────────────────────────────────────────────────────────────
 print("//// LOADING MODEL ////")
-model = YOLO('models/200923_best_yolov8n.pt')
+model = YOLO('models/apex_trained.pt')
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Running on: {device}")
 model.to(device)
