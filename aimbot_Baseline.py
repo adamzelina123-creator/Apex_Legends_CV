@@ -132,7 +132,9 @@ def detection_loop(detect_param):
     global latest_boxes, latest_aim_target, running
     global _locked_target_id, _lock_frames_left, _target_vel, _confirmation_buffer
     global _prev_right_click, _prev_left_click
+    frame_count = 0
     while running:
+        frame_count += 1
         t0 = perf_counter()
         frame = get_frame()
         results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
@@ -140,6 +142,8 @@ def detection_loop(detect_param):
         # ── Pass 1: shape / size / confidence filters ──────────────────────────
         raw_detections = []
         if len(results[0].boxes):
+            if frame_count % 30 == 0:
+                print(f"[DETECT] Raw boxes: {len(results[0].boxes)}")
             for i, box in enumerate(results[0].boxes.xyxy):
                 conf     = results[0].boxes.conf[i].item()
                 cls_name = model.names[int(results[0].boxes.cls[i])]
@@ -161,6 +165,8 @@ def detection_loop(detect_param):
                 yc   = y1 + AIM_HEAD_BIAS * (y2 - y1)
                 dist = ((xc - 320) ** 2 + (yc - 320) ** 2) ** 0.5
                 if dist >= AIM_FOV:
+                    if frame_count % 30 == 0:
+                        print(f"[FILTER] Target at dist={dist:.0f} > FOV={AIM_FOV}")
                     continue
 
                 # ── Confidence hysteresis ────────────────────────────────────
@@ -173,8 +179,12 @@ def detection_loop(detect_param):
                 )
                 min_conf = CONF_MAINTAIN if is_near_lock else CONF_ACQUIRE
                 if conf < min_conf:
+                    if frame_count % 30 == 0:
+                        print(f"[FILTER] Target conf={conf:.2f} < min={min_conf:.2f}")
                     continue
 
+                if frame_count % 30 == 0:
+                    print(f"[PASS] Target at ({xc:.0f}, {yc:.0f}) conf={conf:.2f}")
                 raw_detections.append((xc, yc, x1, y1, x2, y2, conf, dist))
 
         # ── Pass 2: temporal confirmation ──────────────────────────────────────
@@ -193,7 +203,8 @@ def detection_loop(detect_param):
 
         boxes_detected = [(a[2], a[3], a[4], a[5], a[6]) for a in avatar_boxes]
 
-        # ── Target lock: persist on same enemy, update velocity each frame ─────
+        if frame_count % 30 == 0:  # Print every 1 second at 30 FPS
+            print(f"Frame {frame_count}: {len(avatar_boxes)} targets confirmed, should_move={should_move}, target={target is not None}, clicked=(R:{just_clicked and right_click_pressed}, L:{just_clicked and left_click_pressed})")
         best_move          = (0, 0)
         should_move        = False
         best_target_screen = None
@@ -266,6 +277,7 @@ def detection_loop(detect_param):
                 scale  = CAPTURE_SIZE / 640
                 snap_x = round((target[0] - 320) * scale / AIM_SENSITIVITY)
                 snap_y = round((target[1] - 320) * scale / AIM_SENSITIVITY)
+                print(f"[SNAP] Moving mouse by ({snap_x}, {snap_y})")
                 mouse_controller.move(snap_x, snap_y)
 
         # Cap detection rate — keeps GPU headroom for the game
