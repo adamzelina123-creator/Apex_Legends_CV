@@ -53,9 +53,8 @@ def label_images(input_dir: str, model_path: str, conf: float):
 
         lines = []
         for box in boxes:
-            cls  = int(box.cls[0])
             xywhn = box.xywhn[0].tolist()   # normalised cx, cy, w, h
-            lines.append(f'{cls} {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f}')
+            lines.append(f'0 {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f}')  # always class 0
 
         txt_path.write_text('\n'.join(lines))
         labelled += 1

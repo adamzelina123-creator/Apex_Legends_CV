@@ -64,9 +64,8 @@ def auto_label(captures_dir: Path, model: YOLO, conf: float):
         results = model(str(img_path), conf=conf, verbose=False)
         lines = []
         for box in results[0].boxes:
-            cls   = int(box.cls[0])
             cx, cy, w, h = box.xywhn[0].tolist()
-            lines.append(f'{cls} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')
+            lines.append(f'0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')  # always class 0 = avatar
 
         txt_path.write_text('\n'.join(lines))
         new_labels += 1
