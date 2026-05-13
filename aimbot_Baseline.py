@@ -56,10 +56,10 @@ VELOCITY_WEIGHT = 0.5
 # ── Detection quality filters ──────────────────────────────────────────────────
 # CONF_ACQUIRE: confidence required to lock onto a brand-new target.
 #   Higher = fewer false positives when acquiring. Raise if non-legend boxes fire.
-CONF_ACQUIRE    = 0.65
+CONF_ACQUIRE    = 0.55   # lowered — catch more targets, especially fast-moving ones
 # CONF_MAINTAIN: relaxed threshold to keep tracking an already-confirmed target.
 #   Prevents flickering on a target that briefly dips in confidence.
-CONF_MAINTAIN   = 0.50
+CONF_MAINTAIN   = 0.40
 # Legend bounding-box aspect ratio (height / width) in 640-px model space.
 #   Standing legends are taller than wide; filter everything else out.
 ASPECT_MIN      = 1.2    # exclude wide blobs  (crates, vehicles, UI widgets)
@@ -70,7 +70,7 @@ BOX_MAX_H       = 560    # ignore near-full-screen boxes — usually walls/floor
 # Temporal confirmation: a candidate must appear in the same ~20px grid cell
 # for this many consecutive frames before it becomes a valid aim target.
 #   2 = one frame of confirmation (very responsive yet filters single-frame hits)
-CONFIRM_FRAMES  = 2
+CONFIRM_FRAMES  = 1   # 1 = no delay; target is valid the first frame it passes filters
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 mouse_controller    = MouseController()
@@ -309,31 +309,35 @@ class ESPOverlay:
             cx     = (sx1 + sx2) // 2
             head_y = sy1 + int((sy2 - sy1) * AIM_HEAD_BIAS)
 
-            # ── Subtle body line (feet → head) ────────────────────────────────
+            # ── Body line ────────────────────────────────────────────────────
             self.canvas.create_line(cx, sy2, cx, head_y,
-                                    fill='#FF2200', width=2, dash=(4, 4))
+                                    fill='#FF2200', width=1, dash=(4, 4))
 
-            # ── Head glow: concentric circles, dark outer → bright inner ──────
-            head_glow = [
-                (26, '#1A0000', 5),
-                (20, '#550000', 4),
-                (14, '#AA0000', 3),
-                (9,  '#FF2200', 2),
-                (5,  '#FF6633', 1),
-            ]
-            for r, colour, lw in head_glow:
-                self.canvas.create_oval(cx - r, head_y - r,
-                                        cx + r, head_y + r,
-                                        outline=colour, width=lw, fill='')
-
-            # ── Bright centre dot ─────────────────────────────────────────────
-            self.canvas.create_oval(cx - 3, head_y - 3,
-                                    cx + 3, head_y + 3,
+            # ── Head glow: 2 rings only to reduce GPU load ────────────────
+            self.canvas.create_oval(cx - 16, head_y - 16,
+                                    cx + 16, head_y + 16,
+                                    outline='#880000', width=3, fill='')
+            self.canvas.create_oval(cx - 7, head_y - 7,
+                                    cx + 7, head_y + 7,
+                                    outline='#FF4400', width=2, fill='')
+            self.canvas.create_oval(cx - 2, head_y - 2,
+                                    cx + 2, head_y + 2,
                                     fill='#FFFFFF', outline='')
 
+        # ── Aim crosshair: only visible while right-clicking (ADS) ───────────
+        if right_click_pressed:
+            with boxes_lock:
+                aim = latest_aim_target
+            if aim:
+                tx, ty = aim
+                self.canvas.create_line(tx - 10, ty, tx + 10, ty,
+                                        fill='#00FF88', width=1)
+                self.canvas.create_line(tx, ty - 10, tx, ty + 10,
+                                        fill='#00FF88', width=1)
+                self.canvas.create_oval(tx - 4, ty - 4, tx + 4, ty + 4,
+                                        outline='#00FF88', width=1, fill='')
 
-
-        self.root.after(16, self.update)   # ~60 fps
+        self.root.after(50, self.update)   # 20 fps — reduces game lag
 
     def run(self):
         self.update()
