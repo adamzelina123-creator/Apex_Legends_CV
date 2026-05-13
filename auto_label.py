@@ -28,7 +28,7 @@ DEFAULT_CONF  = 0.30   # lower than aimbot so we catch more, review the iffy one
 
 def label_images(input_dir: str, model_path: str, conf: float):
     input_path = Path(input_dir)
-    images = sorted(input_path.glob('*.png')) + sorted(input_path.glob('*.jpg'))
+    images = sorted(input_path.glob('*.png')) + sorted(input_path.glob('*.jpg')) + sorted(input_path.glob('*.jpeg'))
 
     if not images:
         print(f'No images found in "{input_dir}". Run collect_training_data.py first.')

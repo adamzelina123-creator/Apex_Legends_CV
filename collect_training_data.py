@@ -37,7 +37,7 @@ CAPTURE_SIZE = 900          # square crop side in pixels
 CROP_X       = (SCREEN_W - CAPTURE_SIZE) // 2   # 350
 CROP_Y       = 0
 
-CAPTURE_FPS  = 2            # frames per second when capturing
+CAPTURE_FPS  = 1            # 1 frame/sec — low enough to not compete with the game
 OUTPUT_DIR   = 'training_captures'
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -84,8 +84,8 @@ def capture_loop():
                 frame   = sct.grab(region)
                 img     = np.array(frame)[:, :, :3]   # BGR, drop alpha
                 ts      = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-                fname   = os.path.join(OUTPUT_DIR, f'{ts}_{frame_count:04d}.png')
-                cv2.imwrite(fname, img)
+                fname   = os.path.join(OUTPUT_DIR, f'{ts}_{frame_count:04d}.jpg')
+                cv2.imwrite(fname, img, [cv2.IMWRITE_JPEG_QUALITY, 92])
                 frame_count += 1
                 print(f'[collect] Saved {fname}')
 
