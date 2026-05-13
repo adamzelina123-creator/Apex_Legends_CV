@@ -197,6 +197,7 @@ def detection_loop(detect_param):
         best_move          = (0, 0)
         should_move        = False
         best_target_screen = None
+        target             = None
 
         if avatar_boxes:
             target = None
@@ -259,7 +260,7 @@ def detection_loop(detect_param):
         _prev_right_click = right_click_pressed
         _prev_left_click  = left_click_pressed
 
-        if (right_click_pressed or left_click_pressed) and should_move:
+        if (right_click_pressed or left_click_pressed) and should_move and target is not None:
             if just_clicked and best_target_screen is not None:
                 # First frame of click: warp crosshair directly to head
                 scale  = CAPTURE_SIZE / 640
