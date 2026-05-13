@@ -8,88 +8,33 @@ import cv2
 import numpy as np
 import sys
 import threading
-import tkinter as tk
 import torch
 
 # ── Model ──────────────────────────────────────────────────────────────────────
 print("//// LOADING MODEL ////")
-model = YOLO('models/apex_trained.pt')
+model = YOLO('models/200923_best_yolov8n.pt')
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Running on: {device}")
 model.to(device)
 
 # ── Screen info ────────────────────────────────────────────────────────────────
 _sct        = mss()
-SCREEN_W    = 1600
-SCREEN_H    = 900
-# Capture a square region centred on the crosshair, scaled to 640 for the model.
-# 640 = tight center, 900 = full screen height (max range for 900p)
-CAPTURE_SIZE = min(900, SCREEN_W, SCREEN_H)   # 900 for 1600x900
-CROP_X      = (SCREEN_W - CAPTURE_SIZE) // 2   # 350 — centres horizontally
-CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2   # 0   — full vertical coverage
-
-# ── Aimbot tuning ──────────────────────────────────────────────────────────────
-# AIM_FOV: max distance from crosshair (640px space) to lock onto a target.
-#   Lower = only snap to enemies very close to crosshair (safer/more precise)
-AIM_FOV         = 250
-# AIM_STRENGTH: fraction of distance moved per frame. 0.3 = smooth tracking,
-#   1.0 = instant snap (full distance every frame — hardest possible lock).
-AIM_STRENGTH    = 1.0
-# AIM_SENSITIVITY: divide movement by this to match your DPI × in-game sens.
-#   Formula: in-game sens (5.0) × (DPI / 800) = 5.0 × (1200 / 800) = 7.5
-#   Increase if overshooting, decrease if undershooting.
-AIM_SENSITIVITY = 7.5
-# AIM_HEAD_BIAS: fraction of box height from the top edge to the aim point.
-#   0.0 = very top of box, 0.08 = head centre (head ≈ top 15% of full-body box)
-AIM_HEAD_BIAS   = 0.08
-# HEAD_SNAP_RADIUS: when the crosshair is this many screen-px from the head
-#   centre, switch to instant (strength=1.0) to lock precisely on the head.
-#   With AIM_STRENGTH=1.0 this is always hit — kept for when strength is lowered.
-HEAD_SNAP_RADIUS = 50
-# TARGET_LOCK_FRAMES: how many frames to keep locking the same target before
-#   allowing a switch. Prevents flickering between enemies.
-TARGET_LOCK_FRAMES = 12
-# VELOCITY_WEIGHT: how much to lead the target based on its movement velocity.
-#   0.0 = no prediction, 1.0 = full one-frame lead. 0.5 is a good start.
-VELOCITY_WEIGHT = 0.5
-
-# ── Detection quality filters ──────────────────────────────────────────────────
-# CONF_ACQUIRE: confidence required to lock onto a brand-new target.
-#   Higher = fewer false positives when acquiring. Raise if non-legend boxes fire.
-CONF_ACQUIRE    = 0.55   # lowered — catch more targets, especially fast-moving ones
-# CONF_MAINTAIN: relaxed threshold to keep tracking an already-confirmed target.
-#   Prevents flickering on a target that briefly dips in confidence.
-CONF_MAINTAIN   = 0.40
-# Legend bounding-box aspect ratio (height / width) in 640-px model space.
-#   Standing legends are taller than wide; filter everything else out.
-ASPECT_MIN      = 1.2    # exclude wide blobs  (crates, vehicles, UI widgets)
-ASPECT_MAX      = 4.5    # exclude tall slivers (poles, door frames, banners)
-# Bounding-box height limits (640-px model space).
-BOX_MIN_H       = 18     # ignore tiny distant blobs — likely noise or loot
-BOX_MAX_H       = 560    # ignore near-full-screen boxes — usually walls/floor
-# Temporal confirmation: a candidate must appear in the same ~20px grid cell
-# for this many consecutive frames before it becomes a valid aim target.
-#   2 = one frame of confirmation (very responsive yet filters single-frame hits)
-CONFIRM_FRAMES  = 1   # 1 = no delay; target is valid the first frame it passes filters
+_monitor    = _sct.monitors[1]
+SCREEN_W    = _monitor['width']
+SCREEN_H    = _monitor['height']
+# Increase CAPTURE_SIZE for more range (covers wider area, scaled to 640 for model)
+# 640 = tight center, 960 = ~50% more range, 1280 = ~100% more range
+CAPTURE_SIZE = min(960, SCREEN_W, SCREEN_H)
+CROP_X      = (SCREEN_W - CAPTURE_SIZE) // 2
+CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 mouse_controller    = MouseController()
 right_click_pressed = False
 left_click_pressed  = False
 running             = True
-esp_visible         = True        # Toggle with F1
-latest_boxes        = []          # list of (x1, y1, x2, y2, conf)
-latest_aim_target   = None        # (screen_x, screen_y) of current aim point
+latest_boxes        = []   # list of (x1, y1, x2, y2, conf)
 boxes_lock          = threading.Lock()
-
-# Target lock state (only used inside detection_loop)
-_locked_target_id   = None        # (xc, yc) of locked target last frame
-_lock_frames_left   = 0           # frames remaining on current lock
-_target_vel         = (0.0, 0.0)  # velocity of locked target (px/frame)
-_confirmation_buffer = {}         # (grid_x, grid_y) → consecutive frames seen
-# Snap-on-click: track previous button state to detect the exact press frame
-_prev_right_click   = False
-_prev_left_click    = False
 
 # ── Mouse listener ─────────────────────────────────────────────────────────────
 def on_mouse_press(x, y, button, pressed):
@@ -103,16 +48,6 @@ def mouse_listener_thread():
     with MouseListener(on_click=on_mouse_press) as listener:
         listener.join()
 
-# ── Keyboard listener (F1 = toggle ESP) ───────────────────────────────────────
-def on_key_press(key):
-    global esp_visible
-    if key == Key.f1:
-        esp_visible = not esp_visible
-
-def keyboard_listener_thread():
-    with KeyboardListener(on_press=on_key_press) as listener:
-        listener.join()
-
 # ── Fast screen capture ────────────────────────────────────────────────────────
 def get_frame():
     region = {'left': CROP_X, 'top': CROP_Y, 'width': CAPTURE_SIZE, 'height': CAPTURE_SIZE}
@@ -123,216 +58,61 @@ def get_frame():
         rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_NEAREST)
     return rgb
 
-# ── Detection + aimbot loop ────────────────────────────────────────────────────
-# Run at 30 FPS to reduce GPU load while maintaining responsive aiming.
+# ── Detection + aimbot loop (30 FPS for performance) ────────────────────────────
 DETECT_FPS    = 30
 DETECT_PERIOD = 1.0 / DETECT_FPS
 
 def detection_loop(detect_param):
-    global latest_boxes, latest_aim_target, running
-    global _locked_target_id, _lock_frames_left, _target_vel, _confirmation_buffer
-    global _prev_right_click, _prev_left_click
-    frame_count = 0
+    global latest_boxes, running
     while running:
-        frame_count += 1
         t0 = perf_counter()
         frame = get_frame()
         results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
 
-        # ── Pass 1: shape / size / confidence filters ──────────────────────────
-        raw_detections = []
+        boxes_detected = []
+        best_dist  = float('inf')
+        best_move  = (0, 0)
+        should_move = False
+
         if len(results[0].boxes):
-            if frame_count % 30 == 0:
-                print(f"[DETECT] Raw boxes: {len(results[0].boxes)}")
             for i, box in enumerate(results[0].boxes.xyxy):
                 conf     = results[0].boxes.conf[i].item()
                 cls_name = model.names[int(results[0].boxes.cls[i])]
                 if cls_name != 'avatar':
                     continue
-
                 x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
+                boxes_detected.append((x1, y1, x2, y2, conf))
 
-                # ── Shape / size guard ───────────────────────────────────────
-                w = x2 - x1
-                h = y2 - y1
-                aspect = h / max(w, 1.0)
-                if not (ASPECT_MIN <= aspect <= ASPECT_MAX):
-                    continue          # not a legend silhouette
-                if not (BOX_MIN_H <= h <= BOX_MAX_H):
-                    continue          # too small (noise) or too large (wall)
+                x_center = (x1 + x2) / 2
+                y_center = y1 + 0.15 * (y2 - y1)
 
-                xc   = (x1 + x2) / 2
-                yc   = y1 + AIM_HEAD_BIAS * (y2 - y1)
-                dist = ((xc - 320) ** 2 + (yc - 320) ** 2) ** 0.5
-                if dist >= AIM_FOV:
-                    if frame_count % 30 == 0:
-                        print(f"[FILTER] Target at dist={dist:.0f} > FOV={AIM_FOV}")
-                    continue
-
-                # ── Confidence hysteresis ────────────────────────────────────
-                # Allow a lower threshold to *keep* an already-locked target vs
-                # a higher threshold to *acquire* a new one.
-                is_near_lock = (
-                    _lock_frames_left > 0 and _locked_target_id is not None
-                    and ((xc - _locked_target_id[0]) ** 2
-                         + (yc - _locked_target_id[1]) ** 2) ** 0.5 < 80
-                )
-                min_conf = CONF_MAINTAIN if is_near_lock else CONF_ACQUIRE
-                if conf < min_conf:
-                    if frame_count % 30 == 0:
-                        print(f"[FILTER] Target conf={conf:.2f} < min={min_conf:.2f}")
-                    continue
-
-                if frame_count % 30 == 0:
-                    print(f"[PASS] Target at ({xc:.0f}, {yc:.0f}) conf={conf:.2f}")
-                raw_detections.append((xc, yc, x1, y1, x2, y2, conf, dist))
-
-        # ── Pass 2: temporal confirmation ──────────────────────────────────────
-        # A detection must appear in the same ~20 px grid cell for CONFIRM_FRAMES
-        # consecutive frames before it is treated as a real target.
-        new_buf      = {}
-        avatar_boxes = []
-        for det in raw_detections:
-            xc, yc   = det[0], det[1]
-            grid_key = (int(xc) // 20, int(yc) // 20)
-            frames_seen = _confirmation_buffer.get(grid_key, 0) + 1
-            new_buf[grid_key] = frames_seen
-            if frames_seen >= CONFIRM_FRAMES:
-                avatar_boxes.append(det)
-        _confirmation_buffer = new_buf
-
-        boxes_detected = [(a[2], a[3], a[4], a[5], a[6]) for a in avatar_boxes]
-
-        if frame_count % 30 == 0:  # Print every 1 second at 30 FPS
-            print(f"Frame {frame_count}: {len(avatar_boxes)} targets confirmed, should_move={should_move}, target={target is not None}, clicked=(R:{just_clicked and right_click_pressed}, L:{just_clicked and left_click_pressed})")
-        best_move          = (0, 0)
-        should_move        = False
-        best_target_screen = None
-        target             = None
-
-        if avatar_boxes:
-            target = None
-
-            if _lock_frames_left > 0 and _locked_target_id is not None:
-                lx, ly = _locked_target_id
-                best_match = min(avatar_boxes,
-                                 key=lambda a: (a[0]-lx)**2 + (a[1]-ly)**2)
-                match_dist = ((best_match[0]-lx)**2 + (best_match[1]-ly)**2) ** 0.5
-                if match_dist < 80:
-                    # Update velocity: how much the target moved since last frame
-                    _target_vel = (
-                        0.6 * _target_vel[0] + 0.4 * (best_match[0] - lx),
-                        0.6 * _target_vel[1] + 0.4 * (best_match[1] - ly),
-                    )
-                    _locked_target_id = (best_match[0], best_match[1])
-                    _lock_frames_left -= 1
-                    target = best_match
-                else:
-                    _lock_frames_left = 0
-
-            if target is None:
-                target = min(avatar_boxes, key=lambda a: a[7])
-                _locked_target_id = (target[0], target[1])
-                _lock_frames_left = TARGET_LOCK_FRAMES
-                _target_vel = (0.0, 0.0)
-
-            # Lead the target by predicted velocity
-            pred_x = xc + _target_vel[0] * VELOCITY_WEIGHT
-            pred_y = yc + _target_vel[1] * VELOCITY_WEIGHT
-
-            scale = CAPTURE_SIZE / 640
-            raw_x = (pred_x - 320) * scale / AIM_SENSITIVITY
-            raw_y = (pred_y - 320) * scale / AIM_SENSITIVITY
-            # Within HEAD_SNAP_RADIUS px: snap instantly so the crosshair
-            # locks precisely onto the head instead of asymptotically approaching.
-            dist_px = (raw_x ** 2 + raw_y ** 2) ** 0.5
-            strength = 1.0 if dist_px <= HEAD_SNAP_RADIUS else AIM_STRENGTH
-            best_move   = (raw_x * strength, raw_y * strength)
-            should_move = abs(raw_x) > 0.5 or abs(raw_y) > 0.5
-            best_target_screen = (
-                int(pred_x * scale) + CROP_X,
-                int(pred_y * scale) + CROP_Y,
-            )
-        else:
-            _lock_frames_left = 0
-            _locked_target_id = None
-            _target_vel       = (0.0, 0.0)
+                # Pick target closest to crosshair (crop is 1:1 with screen pixels)
+                dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
+                if dist < best_dist and dist > 3:   # dead zone: ignore <3px offsets
+                    best_dist = dist
+                    # coords from model are in 640x640 space, scale back to capture size
+                    scale = CAPTURE_SIZE / 640
+                    mx = (x_center - 320) * scale / 1.1
+                    my = (y_center - 320) * scale / 1.1
+                    # Smoothing: 0.75 = very snappy, reaches target in ~1 frame
+                    smooth = 0.75
+                    jx = random.uniform(-0.3, 0.3)
+                    jy = random.uniform(-0.3, 0.3)
+                    best_move   = (mx * smooth + jx, my * smooth + jy)
+                    should_move = True
 
         with boxes_lock:
-            latest_boxes      = boxes_detected
-            latest_aim_target = best_target_screen
+            latest_boxes = boxes_detected
 
-        # Activate on right click (ADS) OR left click (shoot) — but only moves
-        # the mouse when a confirmed legend is in the FOV (should_move guard).
-        just_clicked = (
-            (right_click_pressed and not _prev_right_click) or
-            (left_click_pressed  and not _prev_left_click)
-        )
-        _prev_right_click = right_click_pressed
-        _prev_left_click  = left_click_pressed
+        if (right_click_pressed or left_click_pressed) and should_move:
+            sleep(random.uniform(0.005, 0.015))   # 5-15 ms minimal reaction variance
+            mouse_controller.move(round(best_move[0]), round(best_move[1]))
 
-        if (right_click_pressed or left_click_pressed) and should_move and target is not None:
-            if just_clicked and best_target_screen is not None:
-                # Snap to head on first click only
-                scale  = CAPTURE_SIZE / 640
-                snap_x = round((target[0] - 320) * scale / AIM_SENSITIVITY)
-                snap_y = round((target[1] - 320) * scale / AIM_SENSITIVITY)
-                print(f"[SNAP] Moving mouse by ({snap_x}, {snap_y})")
-                mouse_controller.move(snap_x, snap_y)
-
-        # Cap detection rate — keeps GPU headroom for the game
+        # Cap detection rate to 30 FPS
         elapsed = perf_counter() - t0
         wait = DETECT_PERIOD - elapsed
         if wait > 0:
             sleep(wait)
-
-# ── ESP Overlay ────────────────────────────────────────────────────────────────
-class ESPOverlay:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title('ESP')
-        self.root.geometry(f'{SCREEN_W}x{SCREEN_H}+0+0')
-        self.root.overrideredirect(True)
-        self.root.wm_attributes('-topmost', True)
-        self.root.wm_attributes('-transparentcolor', 'black')
-        self.root.configure(bg='black')
-        self.canvas = tk.Canvas(self.root, bg='black', highlightthickness=0,
-                                width=SCREEN_W, height=SCREEN_H)
-        self.canvas.pack()
-
-    def update(self):
-        if not esp_visible:
-            self.root.after(100, self.update)
-            return
-        
-        self.canvas.delete('all')
-        with boxes_lock:
-            boxes = list(latest_boxes)
-
-        if not boxes:
-            self.root.after(100, self.update)
-            return
-
-        scale = CAPTURE_SIZE / 640
-        for (x1, y1, x2, y2, conf) in boxes:
-            sx1 = int(x1 * scale) + CROP_X
-            sy1 = int(y1 * scale) + CROP_Y
-            sx2 = int(x2 * scale) + CROP_X
-            sy2 = int(y2 * scale) + CROP_Y
-
-            cx     = (sx1 + sx2) // 2
-            head_y = sy1 + int((sy2 - sy1) * AIM_HEAD_BIAS)
-
-            # ── Head dot only (minimal draw) ────────────────────────────────
-            self.canvas.create_oval(cx - 4, head_y - 4,
-                                    cx + 4, head_y + 4,
-                                    outline='#FF4400', width=2, fill='')
-
-        self.root.after(100, self.update)   # 10 fps — minimal load
-
-    def run(self):
-        self.update()
-        self.root.mainloop()
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 def main():
@@ -343,9 +123,8 @@ def main():
         detect_param = 0.60
 
     threading.Thread(target=mouse_listener_thread, daemon=True).start()
-    threading.Thread(target=keyboard_listener_thread, daemon=True).start()
     threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
-    print("Aimbot running — no overlay drawing")
+    print("Aimbot running (optimized, no overlay) — right-click or left-click to aim")
     
     try:
         while running:
