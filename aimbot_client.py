@@ -28,7 +28,7 @@ from pynput.mouse import Listener as MouseListener, Button
 from pynput.keyboard import Listener as KeyboardListener, Key
 
 # ── CONFIG — change SERVER_IP to your second PC's local IP ────────────────────
-SERVER_IP   = '192.168.1.XXX'   # ← run `ipconfig` on second PC, use its IPv4
+SERVER_IP   = '192.168.2.71'     # old PC's IP
 SERVER_PORT = 5005
 CAPTURE_SIZE = 640
 JPEG_QUALITY = 85    # 70-90: lower = smaller/faster packets, more compression
