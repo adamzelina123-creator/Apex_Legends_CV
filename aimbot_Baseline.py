@@ -24,7 +24,7 @@ SCREEN_W    = _monitor['width']
 SCREEN_H    = _monitor['height']
 # Increase CAPTURE_SIZE for more range (covers wider area, scaled to 640 for model)
 # 640 = tight center, 960 = ~50% more range, 1280 = ~100% more range
-CAPTURE_SIZE = min(960, SCREEN_W, SCREEN_H)
+CAPTURE_SIZE = 640   # 640 = no resize needed, lowest GPU overhead
 CROP_X      = (SCREEN_W - CAPTURE_SIZE) // 2
 CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2
 
@@ -71,58 +71,67 @@ def get_frame():
     return rgb
 
 # ── Detection + aimbot loop ─────────────────────────────────────────────────────
-DETECT_FPS_ACTIVE = 20          # FPS when aiming (button held)
+DETECT_FPS_ACTIVE = 15          # FPS when aiming (button held)
 DETECT_FPS_IDLE   = 10          # FPS when not aiming (saves CPU/GPU)
 
 def detection_loop(detect_param):
     global latest_boxes, running
+    # Warm up model so first real inference isn't slow
+    dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+    model(dummy, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
+    print("Model warmed up — ready")
+
     while running:
         t0 = perf_counter()
-        frame = get_frame()
-        results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
+        aiming = right_click_pressed or left_click_pressed
 
-        boxes_detected = []
-        best_dist  = float('inf')
-        best_move  = (0, 0)
-        should_move = False
+        # Only run inference while aiming — frees GPU for the game otherwise
+        if aiming and aimbot_enabled:
+            frame   = get_frame()
+            results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
 
-        if len(results[0].boxes):
-            for i, box in enumerate(results[0].boxes.xyxy):
-                conf     = results[0].boxes.conf[i].item()
-                cls_name = model.names[int(results[0].boxes.cls[i])]
-                if cls_name != 'avatar':
-                    continue
-                x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
-                boxes_detected.append((x1, y1, x2, y2, conf))
+            boxes_detected = []
+            best_dist  = float('inf')
+            best_move  = (0, 0)
+            should_move = False
 
-                x_center = (x1 + x2) / 2
-                y_center = y1 + 0.15 * (y2 - y1)
+            if len(results[0].boxes):
+                for i, box in enumerate(results[0].boxes.xyxy):
+                    conf     = results[0].boxes.conf[i].item()
+                    cls_name = model.names[int(results[0].boxes.cls[i])]
+                    if cls_name != 'avatar':
+                        continue
+                    x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
+                    boxes_detected.append((x1, y1, x2, y2, conf))
 
-                # Pick target closest to crosshair (crop is 1:1 with screen pixels)
-                dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
-                if dist < best_dist and dist > 3:   # dead zone: ignore <3px offsets
-                    best_dist = dist
-                    # coords from model are in 640x640 space, scale back to capture size
-                    scale = CAPTURE_SIZE / 640
-                    mx = (x_center - 320) * scale / 1.1
-                    my = (y_center - 320) * scale / 1.1
-                    # Smoothing: 0.75 = very snappy, reaches target in ~1 frame
-                    smooth = 0.75
-                    jx = random.uniform(-0.3, 0.3)
-                    jy = random.uniform(-0.3, 0.3)
-                    best_move   = (mx * smooth + jx, my * smooth + jy)
-                    should_move = True
+                    x_center = (x1 + x2) / 2
+                    y_center = y1 + 0.15 * (y2 - y1)
 
-        with boxes_lock:
-            latest_boxes = boxes_detected
+                    dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
+                    if dist < best_dist and dist > 3:
+                        best_dist = dist
+                        mx = (x_center - 320) / 1.1
+                        my = (y_center - 320) / 1.1
+                        smooth = 0.75
+                        jx = random.uniform(-0.3, 0.3)
+                        jy = random.uniform(-0.3, 0.3)
+                        best_move   = (mx * smooth + jx, my * smooth + jy)
+                        should_move = True
 
-        if aimbot_enabled and (right_click_pressed or left_click_pressed) and should_move:
-            sleep(random.uniform(0.005, 0.015))   # 5-15 ms minimal reaction variance
-            mouse_controller.move(round(best_move[0]), round(best_move[1]))
+            with boxes_lock:
+                latest_boxes = boxes_detected
 
-        # Dynamic rate: faster when aiming, slower when idle
-        fps    = DETECT_FPS_ACTIVE if (right_click_pressed or left_click_pressed) else DETECT_FPS_IDLE
-        period = 1.0 / fps
+            if should_move:
+                sleep(random.uniform(0.005, 0.015))
+                mouse_controller.move(round(best_move[0]), round(best_move[1]))
+
+            period = 1.0 / DETECT_FPS_ACTIVE
+        else:
+            # Not aiming — clear boxes and sleep, no GPU work
+            with boxes_lock:
+                latest_boxes = []
+            period = 1.0 / DETECT_FPS_IDLE
+
         elapsed = perf_counter() - t0
         wait = period - elapsed
         if wait > 0:
