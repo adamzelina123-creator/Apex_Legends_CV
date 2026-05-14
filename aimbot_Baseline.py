@@ -76,6 +76,13 @@ _aim_dx   = 0.0
 _aim_dy   = 0.0
 _aim_lock = threading.Lock()
 
+# Tracking state — last known head position of the locked target (model coords)
+# If None, will acquire closest-to-center on next detection frame.
+_tracked_cx  = None
+_tracked_cy  = None
+_track_lock  = threading.Lock()
+TRACK_MAX_DIST = 120   # pixels; if target moves further it's considered lost
+
 # ── Mouse listener ─────────────────────────────────────────────────────────────
 def on_mouse_press(x, y, button, pressed):
     global right_click_pressed, left_click_pressed
@@ -107,10 +114,11 @@ def get_frame():
     return frame
 
 # ── Detection loop ─────────────────────────────────────────────────────────────
-# Runs YOLO as fast as the GPU allows and writes the closest head target into
-# (_aim_dx, _aim_dy).  No artificial FPS cap — more detections = tighter lock.
+# Runs YOLO as fast as the GPU allows.
+# Tracking: on first detection acquires the closest-to-centre target; on
+# subsequent frames keeps the same target by matching to its last head position.
 def detection_loop(detect_param):
-    global _aim_dx, _aim_dy, running
+    global _aim_dx, _aim_dy, _tracked_cx, _tracked_cy, running
 
     dummy = np.zeros((640, 640, 3), dtype=np.uint8)
     model(dummy, verbose=False, conf=detect_param, device=device, half=_use_half,
@@ -122,6 +130,9 @@ def detection_loop(detect_param):
             with _aim_lock:
                 _aim_dx = 0.0
                 _aim_dy = 0.0
+            with _track_lock:
+                _tracked_cx = None
+                _tracked_cy = None
             sleep(0.05)
             continue
 
@@ -132,34 +143,47 @@ def detection_loop(detect_param):
                         device=device, half=_use_half,
                         max_det=10, agnostic_nms=True)
 
-        best_dist = float('inf')
-        found_dx  = 0.0
-        found_dy  = 0.0
-        found     = False
-
+        # Collect all avatar head candidates this frame
+        candidates = []   # list of (tx, ty)
         if len(results[0].boxes):
             for i, box in enumerate(results[0].boxes.xyxy):
                 cls_name = model.names[int(results[0].boxes.cls[i])]
                 if cls_name != 'avatar':
                     continue
                 x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
-
-                # Aim at head: top HEAD_OFFSET fraction of the bounding box
                 tx = (x1 + x2) / 2
                 ty = y1 + HEAD_OFFSET * (y2 - y1)
+                candidates.append((tx, ty))
 
-                dist = ((tx - CENTER) ** 2 + (ty - CENTER) ** 2) ** 0.5
-                if dist < best_dist:
-                    best_dist = dist
-                    found_dx  = tx - CENTER   # positive → target is right of centre
-                    found_dy  = ty - CENTER   # positive → target is below centre
-                    found     = True
+        chosen_tx, chosen_ty = None, None
+
+        if candidates:
+            with _track_lock:
+                tcx, tcy = _tracked_cx, _tracked_cy
+
+            if tcx is not None:
+                # Continue tracking: find candidate closest to last known position
+                best = min(candidates, key=lambda c: (c[0]-tcx)**2 + (c[1]-tcy)**2)
+                dist_to_track = ((best[0]-tcx)**2 + (best[1]-tcy)**2) ** 0.5
+                if dist_to_track <= TRACK_MAX_DIST:
+                    chosen_tx, chosen_ty = best
+                else:
+                    # Lost track — reacquire closest to centre
+                    chosen_tx, chosen_ty = min(candidates,
+                        key=lambda c: (c[0]-CENTER)**2 + (c[1]-CENTER)**2)
+            else:
+                # No active track — acquire closest to centre
+                chosen_tx, chosen_ty = min(candidates,
+                    key=lambda c: (c[0]-CENTER)**2 + (c[1]-CENTER)**2)
+
+        with _track_lock:
+            _tracked_cx = chosen_tx
+            _tracked_cy = chosen_ty
 
         with _aim_lock:
-            if found:
-                # Reset full remaining delta; aim_loop will consume it incrementally
-                _aim_dx = found_dx
-                _aim_dy = found_dy
+            if chosen_tx is not None:
+                _aim_dx = chosen_tx - CENTER
+                _aim_dy = chosen_ty - CENTER
             else:
                 _aim_dx = 0.0
                 _aim_dy = 0.0
