@@ -33,6 +33,7 @@ mouse_controller    = MouseController()
 right_click_pressed = False
 left_click_pressed  = False
 running             = True
+aimbot_enabled      = True   # Toggle with F2
 latest_boxes        = []   # list of (x1, y1, x2, y2, conf)
 boxes_lock          = threading.Lock()
 
@@ -48,6 +49,17 @@ def mouse_listener_thread():
     with MouseListener(on_click=on_mouse_press) as listener:
         listener.join()
 
+# ── Keyboard listener (F2 = toggle aimbot) ───────────────────────────────────
+def on_key_press(key):
+    global aimbot_enabled
+    if key == Key.f2:
+        aimbot_enabled = not aimbot_enabled
+        print(f"Aimbot {'ENABLED' if aimbot_enabled else 'DISABLED'}")
+
+def keyboard_listener_thread():
+    with KeyboardListener(on_press=on_key_press) as listener:
+        listener.join()
+
 # ── Fast screen capture ────────────────────────────────────────────────────────
 def get_frame():
     region = {'left': CROP_X, 'top': CROP_Y, 'width': CAPTURE_SIZE, 'height': CAPTURE_SIZE}
@@ -58,9 +70,9 @@ def get_frame():
         rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_NEAREST)
     return rgb
 
-# ── Detection + aimbot loop (30 FPS for performance) ────────────────────────────
-DETECT_FPS    = 30
-DETECT_PERIOD = 1.0 / DETECT_FPS
+# ── Detection + aimbot loop ─────────────────────────────────────────────────────
+DETECT_FPS_ACTIVE = 20          # FPS when aiming (button held)
+DETECT_FPS_IDLE   = 10          # FPS when not aiming (saves CPU/GPU)
 
 def detection_loop(detect_param):
     global latest_boxes, running
@@ -104,13 +116,15 @@ def detection_loop(detect_param):
         with boxes_lock:
             latest_boxes = boxes_detected
 
-        if (right_click_pressed or left_click_pressed) and should_move:
+        if aimbot_enabled and (right_click_pressed or left_click_pressed) and should_move:
             sleep(random.uniform(0.005, 0.015))   # 5-15 ms minimal reaction variance
             mouse_controller.move(round(best_move[0]), round(best_move[1]))
 
-        # Cap detection rate to 30 FPS
+        # Dynamic rate: faster when aiming, slower when idle
+        fps    = DETECT_FPS_ACTIVE if (right_click_pressed or left_click_pressed) else DETECT_FPS_IDLE
+        period = 1.0 / fps
         elapsed = perf_counter() - t0
-        wait = DETECT_PERIOD - elapsed
+        wait = period - elapsed
         if wait > 0:
             sleep(wait)
 
@@ -123,8 +137,9 @@ def main():
         detect_param = 0.60
 
     threading.Thread(target=mouse_listener_thread, daemon=True).start()
+    threading.Thread(target=keyboard_listener_thread, daemon=True).start()
     threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
-    print("Aimbot running (optimized, no overlay) — right-click or left-click to aim")
+    print("Aimbot running — right/left-click to aim | F2 to toggle aimbot on/off")
     
     try:
         while running:
