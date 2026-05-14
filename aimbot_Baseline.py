@@ -31,7 +31,8 @@ print(f"Using: {_model_path}")
 model = YOLO(_model_path)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Running on: {device}")
-model.to(device)
+if _model_path.endswith('.pt'):
+    model.to(device)
 torch.set_num_threads(1)
 torch.set_grad_enabled(False)
 if device == 'cuda':
