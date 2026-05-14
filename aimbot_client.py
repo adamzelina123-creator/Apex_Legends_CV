@@ -30,9 +30,11 @@ from pynput.keyboard import Listener as KeyboardListener, Key
 # ── CONFIG — change SERVER_IP to your second PC's local IP ────────────────────
 SERVER_IP   = '192.168.2.71'     # old PC's IP
 SERVER_PORT = 5005
-CAPTURE_SIZE = 640
-JPEG_QUALITY = 85    # 70-90: lower = smaller/faster packets, more compression
-SNAP_RATIO   = 0.45  # aim smoothing: 0.45 smooth, 1.0 instant
+CAPTURE_SIZE   = 640
+JPEG_QUALITY   = 90    # higher = better detection on server (GPU free now)
+SNAP_RATIO     = 0.45  # aim smoothing: 0.45 smooth, 1.0 instant
+CAPTURE_FPS_ACTIVE = 30  # max grabs/sec while aiming — limits dxcam VRAM pressure
+CAPTURE_FPS_IDLE   = 10  # max grabs/sec while idle
 
 # ── Process priority ───────────────────────────────────────────────────────────
 ctypes.windll.kernel32.SetPriorityClass(
@@ -98,6 +100,8 @@ print("Connected — aimbot running | right/left-click to aim | F2 to toggle")
 
 try:
     while running:
+        t0 = perf_counter()
+
         # ── Capture ────────────────────────────────────────────────────────────
         frame = _camera.grab(region=_region)
         if frame is None:
@@ -123,7 +127,11 @@ try:
             my = _aim_dy * SNAP_RATIO
             if abs(mx) >= 0.5 or abs(my) >= 0.5:
                 raw_move(round(mx), round(my))
-
+        # ── Rate-limit capture to free GPU for Apex texture streaming ─────────
+        fps  = CAPTURE_FPS_ACTIVE if (right_click_pressed or left_click_pressed) else CAPTURE_FPS_IDLE
+        wait = 1.0 / fps - (perf_counter() - t0)
+        if wait > 0:
+            sleep(wait)
 except KeyboardInterrupt:
     print("Stopped.")
 except Exception as e:
