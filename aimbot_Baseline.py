@@ -1,4 +1,5 @@
 from time import sleep
+import random
 from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
 from pynput.keyboard import Listener as KeyboardListener, Key
 from ultralytics import YOLO
@@ -31,16 +32,20 @@ CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2
 # ── Shared state ───────────────────────────────────────────────────────────────
 mouse_controller    = MouseController()
 right_click_pressed = False
+left_click_pressed  = False
 running             = True
 esp_visible         = True   # Toggle with F1
+aimbot_enabled      = True   # Toggle with F2
 latest_boxes        = []   # list of (x1, y1, x2, y2, conf)
 boxes_lock          = threading.Lock()
 
 # ── Mouse listener ─────────────────────────────────────────────────────────────
 def on_mouse_press(x, y, button, pressed):
-    global right_click_pressed
+    global right_click_pressed, left_click_pressed
     if button == Button.right:
         right_click_pressed = pressed
+    elif button == Button.left:
+        left_click_pressed = pressed
 
 def mouse_listener_thread():
     with MouseListener(on_click=on_mouse_press) as listener:
@@ -48,9 +53,12 @@ def mouse_listener_thread():
 
 # ── Keyboard listener (F1 = toggle ESP) ───────────────────────────────────────
 def on_key_press(key):
-    global esp_visible
+    global esp_visible, aimbot_enabled
     if key == Key.f1:
         esp_visible = not esp_visible
+    elif key == Key.f2:
+        aimbot_enabled = not aimbot_enabled
+        print(f"Aimbot {'ENABLED' if aimbot_enabled else 'DISABLED'}")
 
 def keyboard_listener_thread():
     with KeyboardListener(on_press=on_key_press) as listener:
@@ -88,24 +96,29 @@ def detection_loop(detect_param):
                 boxes_detected.append((x1, y1, x2, y2, conf))
 
                 x_center = (x1 + x2) / 2
-                y_center = y1 + 0.1 * (y2 - y1)
+                y_center = y1 + 0.15 * (y2 - y1)
 
                 # Pick target closest to crosshair (crop is 1:1 with screen pixels)
                 dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
-                if dist < best_dist:
+                if dist < best_dist and dist > 3:   # dead zone: ignore <3px offsets
                     best_dist = dist
                     # coords from model are in 640x640 space, scale back to capture size
                     scale = CAPTURE_SIZE / 640
-                    mx = (x_center - 320) * scale / 1.5
-                    my = (y_center - 320) * scale / 1.5
-                    best_move   = (mx, my)
+                    mx = (x_center - 320) * scale / 1.1
+                    my = (y_center - 320) * scale / 1.1
+                    # Smoothing: 0.75 = very snappy, reaches target in ~1 frame
+                    smooth = 0.75
+                    jx = random.uniform(-0.3, 0.3)
+                    jy = random.uniform(-0.3, 0.3)
+                    best_move   = (mx * smooth + jx, my * smooth + jy)
                     should_move = True
 
         with boxes_lock:
             latest_boxes = boxes_detected
 
-        if right_click_pressed and should_move:
-            mouse_controller.move(int(best_move[0]), int(best_move[1]))
+        if aimbot_enabled and (right_click_pressed or left_click_pressed) and should_move:
+            sleep(random.uniform(0.005, 0.015))   # 5-15 ms minimal reaction variance
+            mouse_controller.move(round(best_move[0]), round(best_move[1]))
 
 # ── ESP Overlay ────────────────────────────────────────────────────────────────
 class ESPOverlay:
@@ -121,6 +134,21 @@ class ESPOverlay:
                                 width=SCREEN_W, height=SCREEN_H)
         self.canvas.pack()
 
+    def _draw_glow(self, x1, y1, x2, y2):
+        """Simulate a red glow by drawing fading concentric outline rings."""
+        glow_layers = [
+            (22, '#220000', 1),
+            (18, '#440000', 1),
+            (14, '#770000', 2),
+            (10, '#AA0000', 2),
+            ( 6, '#CC0000', 3),
+            ( 2, '#EE0000', 3),
+        ]
+        for exp, color, lw in glow_layers:
+            self.canvas.create_rectangle(
+                x1 - exp, y1 - exp, x2 + exp, y2 + exp,
+                outline=color, width=lw, fill='')
+
     def update(self):
         self.canvas.delete('all')
         if not esp_visible:
@@ -135,10 +163,12 @@ class ESPOverlay:
             sy1 = int(y1 * scale) + CROP_Y
             sx2 = int(x2 * scale) + CROP_X
             sy2 = int(y2 * scale) + CROP_Y
+            # Glow rings radiating outward from the box
+            self._draw_glow(sx1, sy1, sx2, sy2)
             # Filled box with semi-transparent red tint (stipple) + bright outline
             self.canvas.create_rectangle(sx1, sy1, sx2, sy2,
                                          fill='#FF0000', stipple='gray25',
-                                         outline='#FF0000', width=4)
+                                         outline='#FF0000', width=9)
             # Bright white inner outline for contrast
             self.canvas.create_rectangle(sx1+4, sy1+4, sx2-4, sy2-4,
                                          outline='#FFFFFF', width=1)
@@ -165,12 +195,12 @@ def main():
     try:
         detect_param = float(sys.argv[1])
     except Exception:
-        detect_param = 0.45
+        detect_param = 0.60
 
     threading.Thread(target=mouse_listener_thread, daemon=True).start()
     threading.Thread(target=keyboard_listener_thread, daemon=True).start()
     threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
-    print("ESP ON  — press F1 to toggle overlay")
+    print("ESP ON  — press F1 to toggle overlay | F2 to toggle aimbot")
 
     esp = ESPOverlay()
     esp.run()
