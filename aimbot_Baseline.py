@@ -28,7 +28,7 @@ elif os.path.exists(_onnx):
 else:
     _model_path = _pt
 print(f"Using: {_model_path}")
-model = YOLO(_model_path)
+model = YOLO(_model_path, task='detect')
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Running on: {device}")
 if _model_path.endswith('.pt'):
