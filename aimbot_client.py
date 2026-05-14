@@ -87,10 +87,33 @@ def recv_all(sock, n):
         buf.extend(chunk)
     return bytes(buf)
 
-# ── Main loop ──────────────────────────────────────────────────────────────────
-# Remaining aim delta — consumed each iteration for smooth movement
-_aim_dx = 0.0
-_aim_dy = 0.0
+AIM_HZ  = 120   # dedicated aim loop — independent of network round-trip speed
+
+# ── Shared aim state ─────────────────────────────────────────────────────────
+_aim_dx   = 0.0
+_aim_dy   = 0.0
+_aim_lock = threading.Lock()
+
+# ── Aim loop (120 Hz) ────────────────────────────────────────────────────────
+# Covers SNAP_RATIO of remaining delta each tick → smooth snap + continuous lock
+def aim_loop():
+    global _aim_dx, _aim_dy
+    interval = 1.0 / AIM_HZ
+    while running:
+        t0 = perf_counter()
+        if (right_click_pressed or left_click_pressed) and aimbot_enabled:
+            with _aim_lock:
+                mx = _aim_dx * SNAP_RATIO
+                my = _aim_dy * SNAP_RATIO
+                _aim_dx -= mx
+                _aim_dy -= my
+            if abs(mx) >= 0.5 or abs(my) >= 0.5:
+                raw_move(round(mx), round(my))
+        wait = interval - (perf_counter() - t0)
+        if wait > 0:
+            sleep(wait)
+
+threading.Thread(target=aim_loop, daemon=True).start()
 
 print(f"Connecting to {SERVER_IP}:{SERVER_PORT} ...")
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -117,16 +140,11 @@ try:
         response   = recv_all(sock, 8)
         raw_dx, raw_dy = struct.unpack('>ff', response)
 
-        # Update remaining delta (new detection resets it)
-        _aim_dx = raw_dx
-        _aim_dy = raw_dy
+        # Update remaining delta — aim_loop thread consumes it at 120 Hz
+        with _aim_lock:
+            _aim_dx = raw_dx
+            _aim_dy = raw_dy
 
-        # ── Move mouse if button held ─────────────────────────────────────────
-        if (right_click_pressed or left_click_pressed) and aimbot_enabled:
-            mx = _aim_dx * SNAP_RATIO
-            my = _aim_dy * SNAP_RATIO
-            if abs(mx) >= 0.5 or abs(my) >= 0.5:
-                raw_move(round(mx), round(my))
         # ── Rate-limit capture to free GPU for Apex texture streaming ─────────
         fps  = CAPTURE_FPS_ACTIVE if (right_click_pressed or left_click_pressed) else CAPTURE_FPS_IDLE
         wait = 1.0 / fps - (perf_counter() - t0)
