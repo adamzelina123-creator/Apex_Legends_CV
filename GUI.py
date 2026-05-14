@@ -16,6 +16,7 @@ def start_ab_script():
     ab_script_process = subprocess.Popen([sys.executable, 'aimbot_Baseline.py', f'{detection_value}'])
     ab_on_button.configure(fg_color='#00FF00', text_color='#000000')
     ab_off_button.configure(fg_color='#D488ED', text_color='#550F0F')
+    ab_status_label.configure(text='● ACTIVE', text_color='#00FF00')
 
 # Function to stop the script
 def stop_ab_script():
@@ -26,6 +27,7 @@ def stop_ab_script():
         ab_script_process.wait()
     ab_on_button.configure(fg_color='#D488ED', text_color='#550F0F')
     ab_off_button.configure(fg_color='#FF4444', text_color='#000000')
+    ab_status_label.configure(text='● INACTIVE', text_color='#FF4444')
     
     def tst_end():
         print('END')
@@ -35,6 +37,7 @@ def start_nr_script():
     nr_script_process = subprocess.Popen([sys.executable, 'norecoil.py'])
     nr_on_button.configure(fg_color='#00FF00', text_color='#000000')
     nr_off_button.configure(fg_color='#A8CFB1', text_color='#0D2A02')
+    nr_status_label.configure(text='● ACTIVE', text_color='#00FF00')
 
 def stop_nr_script():
     global nr_script_process
@@ -44,6 +47,7 @@ def stop_nr_script():
         nr_script_process.wait()
     nr_on_button.configure(fg_color='#A8CFB1', text_color='#0D2A02')
     nr_off_button.configure(fg_color='#FF4444', text_color='#000000')
+    nr_status_label.configure(text='● INACTIVE', text_color='#FF4444')
 
 def slider_event(self):
     global detection_value
@@ -107,6 +111,8 @@ nr_off_button = ctk.CTkButton(window,
 
 slider = ctk.CTkSlider(master=window, from_=0.0, to=0.99, command=slider_event)
 
+ab_status_label = ctk.CTkLabel(window, text='● INACTIVE', text_color='#FF4444', font=('Arial', 14, 'bold'))
+nr_status_label = ctk.CTkLabel(window, text='● INACTIVE', text_color='#FF4444', font=('Arial', 14, 'bold'))
 
 current_value_label = ctk.CTkLabel(window, text=f"Object Detection Parameter: {slider.get():.2f}")
 
@@ -114,14 +120,16 @@ current_value_label = ctk.CTkLabel(window, text=f"Object Detection Parameter: {s
 label_ab.grid(row=0, column=0, padx=20, pady=20, columnspan=2)
 ab_on_button.grid(row=1, column=0, padx=20, pady=10)
 ab_off_button.grid(row=1, column=1, padx=20, pady=5)
+ab_status_label.grid(row=2, column=0, columnspan=2, pady=2)
 
 label_nr.grid(row=0, column=2, padx=20, pady=20, columnspan=2)
 nr_on_button.grid(row=1, column=2, padx=20, pady=10)
 nr_off_button.grid(row=1, column=3, padx=20, pady=5)
+nr_status_label.grid(row=2, column=2, columnspan=2, pady=2)
 
 #SLIDER AND VALUES
-slider.grid(row=2, column=0, padx=20, pady=20, columnspan=2)
-current_value_label.grid(row=3, column=0, columnspan=2)
+slider.grid(row=3, column=0, padx=20, pady=20, columnspan=2)
+current_value_label.grid(row=4, column=0, columnspan=2)
 
 window.mainloop()
 # 
