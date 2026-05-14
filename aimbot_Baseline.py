@@ -4,30 +4,60 @@ import random
 from pynput.mouse import Listener as MouseListener, Button
 from pynput.keyboard import Listener as KeyboardListener, Key
 from ultralytics import YOLO
-from mss import mss
-import cv2
+import dxcam
 import numpy as np
 import sys
 import threading
 import torch
 
+# ── Process priority (below-normal so Apex always gets CPU first) ─────────────
+ctypes.windll.kernel32.SetPriorityClass(
+    ctypes.windll.kernel32.GetCurrentProcess(), 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+)
+
 # ── Model ──────────────────────────────────────────────────────────────────────
 print("//// LOADING MODEL ////")
-model = YOLO('models/200923_best_yolov8n.pt')
+import os
+_engine = 'models/200923_best_yolov8n.engine'
+_onnx   = 'models/200923_best_yolov8n.onnx'
+_pt     = 'models/200923_best_yolov8n.pt'
+if os.path.exists(_engine):
+    _model_path = _engine
+elif os.path.exists(_onnx):
+    _model_path = _onnx
+else:
+    _model_path = _pt
+print(f"Using: {_model_path}")
+model = YOLO(_model_path)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Running on: {device}")
 model.to(device)
+torch.set_num_threads(1)
+torch.set_grad_enabled(False)
+if device == 'cuda':
+    torch.backends.cudnn.benchmark = True
+    torch.cuda.set_per_process_memory_fraction(0.30)
+# half precision: .pt on CUDA only; .onnx exported as FP32; .engine has it baked in
+_use_half = device == 'cuda' and _model_path.endswith('.pt')
 
 # ── Screen info ────────────────────────────────────────────────────────────────
-_sct        = mss()
-_monitor    = _sct.monitors[1]
-SCREEN_W    = _monitor['width']
-SCREEN_H    = _monitor['height']
-# Increase CAPTURE_SIZE for more range (covers wider area, scaled to 640 for model)
-# 640 = tight center, 960 = ~50% more range, 1280 = ~100% more range
-CAPTURE_SIZE = min(1280, SCREEN_W, SCREEN_H)  # max FoV without exceeding screen
-CROP_X      = (SCREEN_W - CAPTURE_SIZE) // 2
-CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2
+SCREEN_W = ctypes.windll.user32.GetSystemMetrics(0)
+SCREEN_H = ctypes.windll.user32.GetSystemMetrics(1)
+# 640 = direct capture at model resolution — zero resize cost
+CAPTURE_SIZE = 640
+CROP_X       = (SCREEN_W  - CAPTURE_SIZE) // 2
+CROP_Y       = (SCREEN_H  - CAPTURE_SIZE) // 2
+CENTER       = CAPTURE_SIZE // 2   # 320
+_camera = dxcam.create(output_color='RGB')
+_region = (CROP_X, CROP_Y, CROP_X + CAPTURE_SIZE, CROP_Y + CAPTURE_SIZE)
+
+# ── Aim tuning ─────────────────────────────────────────────────────────────────
+# HEAD_OFFSET: fraction from bbox top → head point (0.0 = very top, 0.15 = mid-upper)
+HEAD_OFFSET = 0.08
+# SNAP_RATIO: fraction of remaining distance covered per aim tick.
+# 0.55 at 120 Hz converges in ~5 ticks (~40 ms) and locks as the target moves.
+SNAP_RATIO  = 0.55
+AIM_HZ      = 120   # dedicated aim loop frequency
 
 # ── Raw mouse move (works with Apex raw input) ────────────────────────────────
 def raw_move(dx, dy):
@@ -38,8 +68,12 @@ right_click_pressed = False
 left_click_pressed  = False
 running             = True
 aimbot_enabled      = True   # Toggle with F2
-latest_boxes        = []   # list of (x1, y1, x2, y2, conf)
-boxes_lock          = threading.Lock()
+
+# Remaining delta (screen pixels) to the head target.
+# detection_loop sets these; aim_loop consumes them incrementally.
+_aim_dx   = 0.0
+_aim_dy   = 0.0
+_aim_lock = threading.Lock()
 
 # ── Mouse listener ─────────────────────────────────────────────────────────────
 def on_mouse_press(x, y, button, pressed):
@@ -53,7 +87,7 @@ def mouse_listener_thread():
     with MouseListener(on_click=on_mouse_press) as listener:
         listener.join()
 
-# ── Keyboard listener (F2 = toggle aimbot) ───────────────────────────────────
+# ── Keyboard listener (F2 = toggle aimbot) ────────────────────────────────────
 def on_key_press(key):
     global aimbot_enabled
     if key == Key.f2:
@@ -66,74 +100,93 @@ def keyboard_listener_thread():
 
 # ── Fast screen capture ────────────────────────────────────────────────────────
 def get_frame():
-    region = {'left': CROP_X, 'top': CROP_Y, 'width': CAPTURE_SIZE, 'height': CAPTURE_SIZE}
-    sct_img = _sct.grab(region)
-    img = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(CAPTURE_SIZE, CAPTURE_SIZE, 4)
-    rgb = img[..., :3][..., ::-1].copy()   # BGRA → RGB
-    if CAPTURE_SIZE != 640:
-        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
-# ── Detection + aimbot loop ─────────────────────────────────────────────────────
-DETECT_FPS_ACTIVE = 12          # FPS when aiming (button held)
-DETECT_FPS_IDLE   = 6           # FPS when not aiming (saves CPU/GPU)
+    frame = _camera.grab(region=_region)   # returns RGB ndarray directly, no copy needed
+    if frame is None:                       # dxcam returns None if frame hasn't changed
+        return None
+    return frame
 
+# ── Detection loop ─────────────────────────────────────────────────────────────
+# Runs YOLO as fast as the GPU allows and writes the closest head target into
+# (_aim_dx, _aim_dy).  No artificial FPS cap — more detections = tighter lock.
 def detection_loop(detect_param):
-    global latest_boxes, running
-    # Warm up model so first real inference isn't slow
+    global _aim_dx, _aim_dy, running
+
     dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-    model(dummy, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
+    model(dummy, verbose=False, conf=detect_param, device=device, half=_use_half,
+          max_det=10, agnostic_nms=True)
     print("Model warmed up — ready")
+
+    while running:
+        if not aimbot_enabled:
+            with _aim_lock:
+                _aim_dx = 0.0
+                _aim_dy = 0.0
+            sleep(0.05)
+            continue
+
+        frame = get_frame()
+        if frame is None:   # dxcam: no new frame yet, skip
+            continue
+        results = model(frame, verbose=False, conf=detect_param,
+                        device=device, half=_use_half,
+                        max_det=10, agnostic_nms=True)
+
+        best_dist = float('inf')
+        found_dx  = 0.0
+        found_dy  = 0.0
+        found     = False
+
+        if len(results[0].boxes):
+            for i, box in enumerate(results[0].boxes.xyxy):
+                cls_name = model.names[int(results[0].boxes.cls[i])]
+                if cls_name != 'avatar':
+                    continue
+                x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
+
+                # Aim at head: top HEAD_OFFSET fraction of the bounding box
+                tx = (x1 + x2) / 2
+                ty = y1 + HEAD_OFFSET * (y2 - y1)
+
+                dist = ((tx - CENTER) ** 2 + (ty - CENTER) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    found_dx  = tx - CENTER   # positive → target is right of centre
+                    found_dy  = ty - CENTER   # positive → target is below centre
+                    found     = True
+
+        with _aim_lock:
+            if found:
+                # Reset full remaining delta; aim_loop will consume it incrementally
+                _aim_dx = found_dx
+                _aim_dy = found_dy
+            else:
+                _aim_dx = 0.0
+                _aim_dy = 0.0
+
+# ── Aim loop ───────────────────────────────────────────────────────────────────
+# Runs at AIM_HZ independent of YOLO speed.  Each tick it covers SNAP_RATIO of
+# the remaining distance, giving fast snap + continuous lock without overshoot.
+def aim_loop():
+    global _aim_dx, _aim_dy
+    interval = 1.0 / AIM_HZ
 
     while running:
         t0 = perf_counter()
 
-        if aimbot_enabled and (right_click_pressed or left_click_pressed):
-            frame   = get_frame()
-            results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
+        if (right_click_pressed or left_click_pressed) and aimbot_enabled:
+            with _aim_lock:
+                mx = _aim_dx * SNAP_RATIO
+                my = _aim_dy * SNAP_RATIO
+                # Reduce remaining delta so we don't overshoot between detections
+                _aim_dx -= mx
+                _aim_dy -= my
 
-            boxes_detected = []
-            best_dist  = float('inf')
-            best_move  = (0, 0)
-            should_move = False
-
-            if len(results[0].boxes):
-                for i, box in enumerate(results[0].boxes.xyxy):
-                    conf     = results[0].boxes.conf[i].item()
-                    cls_name = model.names[int(results[0].boxes.cls[i])]
-                    if cls_name != 'avatar':
-                        continue
-                    x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
-                    boxes_detected.append((x1, y1, x2, y2, conf))
-
-                    x_center = (x1 + x2) / 2
-                    y_center = y1 + 0.15 * (y2 - y1)
-
-                    dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
-                    if dist < best_dist and dist > 3:
-                        best_dist = dist
-                        scale = CAPTURE_SIZE / 640   # map model coords back to screen pixels
-                        mx = (x_center - 320) * scale / 1.1
-                        my = (y_center - 320) * scale / 1.1
-                        smooth = 0.75
-                        jx = random.uniform(-0.3, 0.3)
-                        jy = random.uniform(-0.3, 0.3)
-                        best_move   = (mx * smooth + jx, my * smooth + jy)
-                        should_move = True
-
-            with boxes_lock:
-                latest_boxes = boxes_detected
-
-            if should_move:
-                sleep(random.uniform(0.005, 0.015))
-                raw_move(round(best_move[0]), round(best_move[1]))
-
-            period = 1.0 / DETECT_FPS_ACTIVE
-        else:
-            with boxes_lock:
-                latest_boxes = []
-            period = 1.0 / DETECT_FPS_IDLE
+            # Only fire if the move is at least half a pixel
+            if abs(mx) >= 0.5 or abs(my) >= 0.5:
+                raw_move(round(mx), round(my))
 
         elapsed = perf_counter() - t0
-        wait = period - elapsed
+        wait = interval - elapsed
         if wait > 0:
             sleep(wait)
 
@@ -143,13 +196,14 @@ def main():
     try:
         detect_param = float(sys.argv[1])
     except Exception:
-        detect_param = 0.45
+        detect_param = 0.55
 
-    threading.Thread(target=mouse_listener_thread, daemon=True).start()
+    threading.Thread(target=mouse_listener_thread,    daemon=True).start()
     threading.Thread(target=keyboard_listener_thread, daemon=True).start()
     threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
-    print("Aimbot running — right/left-click to aim | F2 to toggle aimbot on/off")
-    
+    threading.Thread(target=aim_loop,                 daemon=True).start()
+    print("Aimbot running — right/left-click to aim | F2 to toggle")
+
     try:
         while running:
             sleep(1)
