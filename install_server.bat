@@ -14,9 +14,12 @@ if %errorlevel% neq 0 (
     python_installer.exe /quiet InstallAllUsers=1 PrependPath=1 Include_test=0
     del python_installer.exe
     echo Python installed.
-    :: Refresh PATH
-    call refreshenv >nul 2>&1
 )
+
+:: Manually add Python to PATH for this session (in case PATH wasn't refreshed)
+set PATH=%PATH%;C:\Program Files\Python311;C:\Program Files\Python311\Scripts
+set PATH=%PATH%;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python311
+set PATH=%PATH%;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python311\Scripts
 
 echo.
 echo Installing required packages (this may take several minutes)...
