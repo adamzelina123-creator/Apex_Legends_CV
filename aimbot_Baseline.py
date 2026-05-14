@@ -1,6 +1,7 @@
 from time import sleep, perf_counter
+import ctypes
 import random
-from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
+from pynput.mouse import Listener as MouseListener, Button
 from pynput.keyboard import Listener as KeyboardListener, Key
 from ultralytics import YOLO
 from mss import mss
@@ -24,12 +25,15 @@ SCREEN_W    = _monitor['width']
 SCREEN_H    = _monitor['height']
 # Increase CAPTURE_SIZE for more range (covers wider area, scaled to 640 for model)
 # 640 = tight center, 960 = ~50% more range, 1280 = ~100% more range
-CAPTURE_SIZE = 640   # 640 = no resize needed, lowest GPU overhead
+CAPTURE_SIZE = 960   # wider FoV = detects players at longer range
 CROP_X      = (SCREEN_W - CAPTURE_SIZE) // 2
 CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2
 
+# ── Raw mouse move (works with Apex raw input) ────────────────────────────────
+def raw_move(dx, dy):
+    ctypes.windll.user32.mouse_event(0x0001, int(dx), int(dy), 0, 0)
+
 # ── Shared state ───────────────────────────────────────────────────────────────
-mouse_controller    = MouseController()
 right_click_pressed = False
 left_click_pressed  = False
 running             = True
@@ -108,8 +112,9 @@ def detection_loop(detect_param):
                     dist = ((x_center - 320) ** 2 + (y_center - 320) ** 2) ** 0.5
                     if dist < best_dist and dist > 3:
                         best_dist = dist
-                        mx = (x_center - 320) / 1.1
-                        my = (y_center - 320) / 1.1
+                        scale = CAPTURE_SIZE / 640   # map model coords back to screen pixels
+                        mx = (x_center - 320) * scale / 1.1
+                        my = (y_center - 320) * scale / 1.1
                         smooth = 0.75
                         jx = random.uniform(-0.3, 0.3)
                         jy = random.uniform(-0.3, 0.3)
@@ -121,7 +126,7 @@ def detection_loop(detect_param):
 
             if should_move:
                 sleep(random.uniform(0.005, 0.015))
-                mouse_controller.move(round(best_move[0]), round(best_move[1]))
+                raw_move(round(best_move[0]), round(best_move[1]))
 
             period = 1.0 / DETECT_FPS_ACTIVE
         else:
