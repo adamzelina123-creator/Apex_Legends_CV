@@ -1,4 +1,4 @@
-from time import sleep
+from time import sleep, perf_counter
 import random
 from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
 from pynput.keyboard import Listener as KeyboardListener, Key
@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 import sys
 import threading
-import tkinter as tk
 import torch
 
 # ── Model ──────────────────────────────────────────────────────────────────────
@@ -34,8 +33,6 @@ mouse_controller    = MouseController()
 right_click_pressed = False
 left_click_pressed  = False
 running             = True
-esp_visible         = True   # Toggle with F1
-aimbot_enabled      = True   # Toggle with F2
 latest_boxes        = []   # list of (x1, y1, x2, y2, conf)
 boxes_lock          = threading.Lock()
 
@@ -51,19 +48,6 @@ def mouse_listener_thread():
     with MouseListener(on_click=on_mouse_press) as listener:
         listener.join()
 
-# ── Keyboard listener (F1 = toggle ESP) ───────────────────────────────────────
-def on_key_press(key):
-    global esp_visible, aimbot_enabled
-    if key == Key.f1:
-        esp_visible = not esp_visible
-    elif key == Key.f2:
-        aimbot_enabled = not aimbot_enabled
-        print(f"Aimbot {'ENABLED' if aimbot_enabled else 'DISABLED'}")
-
-def keyboard_listener_thread():
-    with KeyboardListener(on_press=on_key_press) as listener:
-        listener.join()
-
 # ── Fast screen capture ────────────────────────────────────────────────────────
 def get_frame():
     region = {'left': CROP_X, 'top': CROP_Y, 'width': CAPTURE_SIZE, 'height': CAPTURE_SIZE}
@@ -71,13 +55,17 @@ def get_frame():
     img = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(CAPTURE_SIZE, CAPTURE_SIZE, 4)
     rgb = img[..., :3][..., ::-1].copy()   # BGRA → RGB
     if CAPTURE_SIZE != 640:
-        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_NEAREST)
     return rgb
 
-# ── Detection + aimbot loop ────────────────────────────────────────────────────
+# ── Detection + aimbot loop (30 FPS for performance) ────────────────────────────
+DETECT_FPS    = 30
+DETECT_PERIOD = 1.0 / DETECT_FPS
+
 def detection_loop(detect_param):
     global latest_boxes, running
     while running:
+        t0 = perf_counter()
         frame = get_frame()
         results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
 
@@ -116,78 +104,15 @@ def detection_loop(detect_param):
         with boxes_lock:
             latest_boxes = boxes_detected
 
-        if aimbot_enabled and (right_click_pressed or left_click_pressed) and should_move:
+        if (right_click_pressed or left_click_pressed) and should_move:
             sleep(random.uniform(0.005, 0.015))   # 5-15 ms minimal reaction variance
             mouse_controller.move(round(best_move[0]), round(best_move[1]))
 
-# ── ESP Overlay ────────────────────────────────────────────────────────────────
-class ESPOverlay:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title('ESP')
-        self.root.geometry(f'{SCREEN_W}x{SCREEN_H}+0+0')
-        self.root.overrideredirect(True)
-        self.root.wm_attributes('-topmost', True)
-        self.root.wm_attributes('-transparentcolor', 'black')
-        self.root.configure(bg='black')
-        self.canvas = tk.Canvas(self.root, bg='black', highlightthickness=0,
-                                width=SCREEN_W, height=SCREEN_H)
-        self.canvas.pack()
-
-    def _draw_glow(self, x1, y1, x2, y2):
-        """Simulate a red glow by drawing fading concentric outline rings."""
-        glow_layers = [
-            (22, '#220000', 1),
-            (18, '#440000', 1),
-            (14, '#770000', 2),
-            (10, '#AA0000', 2),
-            ( 6, '#CC0000', 3),
-            ( 2, '#EE0000', 3),
-        ]
-        for exp, color, lw in glow_layers:
-            self.canvas.create_rectangle(
-                x1 - exp, y1 - exp, x2 + exp, y2 + exp,
-                outline=color, width=lw, fill='')
-
-    def update(self):
-        self.canvas.delete('all')
-        if not esp_visible:
-            self.root.after(16, self.update)
-            return
-        with boxes_lock:
-            boxes = list(latest_boxes)
-
-        for (x1, y1, x2, y2, conf) in boxes:
-            scale = CAPTURE_SIZE / 640
-            sx1 = int(x1 * scale) + CROP_X
-            sy1 = int(y1 * scale) + CROP_Y
-            sx2 = int(x2 * scale) + CROP_X
-            sy2 = int(y2 * scale) + CROP_Y
-            # Glow rings radiating outward from the box
-            self._draw_glow(sx1, sy1, sx2, sy2)
-            # Filled box with semi-transparent red tint (stipple) + bright outline
-            self.canvas.create_rectangle(sx1, sy1, sx2, sy2,
-                                         fill='#FF0000', stipple='gray25',
-                                         outline='#FF0000', width=9)
-            # Bright white inner outline for contrast
-            self.canvas.create_rectangle(sx1+4, sy1+4, sx2-4, sy2-4,
-                                         outline='#FFFFFF', width=1)
-            # Head circle
-            hx = (sx1 + sx2) // 2
-            self.canvas.create_oval(hx - 8, sy1 - 16, hx + 8, sy1,
-                                    fill='#FF0000', outline='#FFFFFF', width=2)
-            # Confidence label
-            self.canvas.create_text(sx1, sy1 - 18,
-                                    text=f'{conf:.0%}',
-                                    fill='#FFFFFF',
-                                    font=('Arial', 10, 'bold'),
-                                    anchor='sw')
-
-        self.root.after(16, self.update)   # ~60 fps
-
-    def run(self):
-        self.update()
-        self.root.mainloop()
+        # Cap detection rate to 30 FPS
+        elapsed = perf_counter() - t0
+        wait = DETECT_PERIOD - elapsed
+        if wait > 0:
+            sleep(wait)
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 def main():
@@ -198,13 +123,13 @@ def main():
         detect_param = 0.60
 
     threading.Thread(target=mouse_listener_thread, daemon=True).start()
-    threading.Thread(target=keyboard_listener_thread, daemon=True).start()
     threading.Thread(target=detection_loop, args=(detect_param,), daemon=True).start()
-    print("ESP ON  — press F1 to toggle overlay | F2 to toggle aimbot")
-
-    esp = ESPOverlay()
-    esp.run()
-
-    running = False
+    print("Aimbot running (optimized, no overlay) — right-click or left-click to aim")
+    
+    try:
+        while running:
+            sleep(1)
+    except KeyboardInterrupt:
+        running = False
 
 main()
