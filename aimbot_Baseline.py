@@ -83,10 +83,8 @@ def detection_loop(detect_param):
 
     while running:
         t0 = perf_counter()
-        aiming = right_click_pressed or left_click_pressed
 
-        # Only run inference while aiming — frees GPU for the game otherwise
-        if aiming and aimbot_enabled:
+        if aimbot_enabled:
             frame   = get_frame()
             results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
 
@@ -127,7 +125,6 @@ def detection_loop(detect_param):
 
             period = 1.0 / DETECT_FPS_ACTIVE
         else:
-            # Not aiming — clear boxes and sleep, no GPU work
             with boxes_lock:
                 latest_boxes = []
             period = 1.0 / DETECT_FPS_IDLE

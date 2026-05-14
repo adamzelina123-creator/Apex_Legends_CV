@@ -20,7 +20,7 @@ def move_mouse_down(t):
     global detected_weapon
     # detected_weapon = detect_what_weapon()
     while not exit_flag.is_set():
-        if len(mouse_buttons_pressed) == 2: # Check if both left and right buttons are pressed
+        if mouse.Button.left in mouse_buttons_pressed: # Activate on left click (shooting)
             if detected_weapon == 'R301':
                 print("WEAPON SET TO R301")
                 weapon_r301(t)
