@@ -56,8 +56,8 @@ _region = (CROP_X, CROP_Y, CROP_X + CAPTURE_SIZE, CROP_Y + CAPTURE_SIZE)
 # HEAD_OFFSET: fraction from bbox top → head point (0.0 = very top, 0.15 = mid-upper)
 HEAD_OFFSET = 0.08
 # SNAP_RATIO: fraction of remaining distance covered per aim tick.
-# 0.55 at 120 Hz converges in ~5 ticks (~40 ms) and locks as the target moves.
-SNAP_RATIO  = 0.55
+# 0.80 at 120 Hz = ~2 ticks (~16 ms) to cover 96% of distance — near-instant snap.
+SNAP_RATIO  = 0.80
 AIM_HZ      = 120   # dedicated aim loop frequency
 
 # ── Raw mouse move (works with Apex raw input) ────────────────────────────────
@@ -147,9 +147,11 @@ def detection_loop(detect_param):
         candidates = []   # list of (tx, ty)
         if len(results[0].boxes):
             for i, box in enumerate(results[0].boxes.xyxy):
-                cls_name = model.names[int(results[0].boxes.cls[i])]
-                if cls_name != 'avatar':
-                    continue
+                # Skip class check when model.names is None (ONNX) — model only detects avatars
+                if model.names is not None:
+                    cls_name = model.names[int(results[0].boxes.cls[i])]
+                    if cls_name != 'avatar':
+                        continue
                 x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
                 tx = (x1 + x2) / 2
                 ty = y1 + HEAD_OFFSET * (y2 - y1)
