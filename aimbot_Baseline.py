@@ -84,7 +84,7 @@ def detection_loop(detect_param):
     while running:
         t0 = perf_counter()
 
-        if aimbot_enabled:
+        if aimbot_enabled and (right_click_pressed or left_click_pressed):
             frame   = get_frame()
             results = model(frame, verbose=False, conf=detect_param, device=device, half=(device == 'cuda'))
 
