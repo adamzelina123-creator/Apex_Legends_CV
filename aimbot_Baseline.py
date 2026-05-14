@@ -5,6 +5,7 @@ from pynput.mouse import Listener as MouseListener, Button
 from pynput.keyboard import Listener as KeyboardListener, Key
 from ultralytics import YOLO
 import dxcam
+import cv2
 import numpy as np
 import sys
 import threading
@@ -44,11 +45,13 @@ _use_half = device == 'cuda' and _model_path.endswith('.pt')
 # ── Screen info ────────────────────────────────────────────────────────────────
 SCREEN_W = ctypes.windll.user32.GetSystemMetrics(0)
 SCREEN_H = ctypes.windll.user32.GetSystemMetrics(1)
-# 640 = direct capture at model resolution — zero resize cost
-CAPTURE_SIZE = 640
+# CAPTURE_SIZE: screen area captured each frame.
+# 640 = no resize (fastest). 960 = 50% more range. 1280 = 100% more range (slower).
+CAPTURE_SIZE = 960
 CROP_X       = (SCREEN_W  - CAPTURE_SIZE) // 2
 CROP_Y       = (SCREEN_H  - CAPTURE_SIZE) // 2
-CENTER       = CAPTURE_SIZE // 2   # 320
+CENTER       = CAPTURE_SIZE // 2   # centre of the capture in screen pixels
+_AIM_SCALE   = CAPTURE_SIZE / 640  # scale model coords → screen pixel deltas
 _camera = dxcam.create(output_color='RGB')
 _region = (CROP_X, CROP_Y, CROP_X + CAPTURE_SIZE, CROP_Y + CAPTURE_SIZE)
 
@@ -56,8 +59,8 @@ _region = (CROP_X, CROP_Y, CROP_X + CAPTURE_SIZE, CROP_Y + CAPTURE_SIZE)
 # HEAD_OFFSET: fraction from bbox top → head point (0.0 = very top, 0.15 = mid-upper)
 HEAD_OFFSET = 0.08
 # SNAP_RATIO: fraction of remaining distance covered per aim tick.
-# 0.80 at 120 Hz = ~2 ticks (~16 ms) to cover 96% of distance — near-instant snap.
-SNAP_RATIO  = 0.80
+# 1.0 = instant hard snap — jumps directly to head in one tick.
+SNAP_RATIO  = 1.0
 AIM_HZ      = 120   # dedicated aim loop frequency
 
 # ── Raw mouse move (works with Apex raw input) ────────────────────────────────
@@ -108,9 +111,11 @@ def keyboard_listener_thread():
 
 # ── Fast screen capture ────────────────────────────────────────────────────────
 def get_frame():
-    frame = _camera.grab(region=_region)   # returns RGB ndarray directly, no copy needed
-    if frame is None:                       # dxcam returns None if frame hasn't changed
+    frame = _camera.grab(region=_region)
+    if frame is None:
         return None
+    if CAPTURE_SIZE != 640:
+        frame = cv2.resize(frame, (640, 640), interpolation=cv2.INTER_LINEAR)
     return frame
 
 # ── Detection loop ─────────────────────────────────────────────────────────────
@@ -172,11 +177,11 @@ def detection_loop(detect_param):
                 else:
                     # Lost track — reacquire closest to centre
                     chosen_tx, chosen_ty = min(candidates,
-                        key=lambda c: (c[0]-CENTER)**2 + (c[1]-CENTER)**2)
+                        key=lambda c: (c[0]-320)**2 + (c[1]-320)**2)
             else:
                 # No active track — acquire closest to centre
                 chosen_tx, chosen_ty = min(candidates,
-                    key=lambda c: (c[0]-CENTER)**2 + (c[1]-CENTER)**2)
+                    key=lambda c: (c[0]-320)**2 + (c[1]-320)**2)
 
         with _track_lock:
             _tracked_cx = chosen_tx
@@ -184,8 +189,9 @@ def detection_loop(detect_param):
 
         with _aim_lock:
             if chosen_tx is not None:
-                _aim_dx = chosen_tx - CENTER
-                _aim_dy = chosen_ty - CENTER
+                # Scale from model coords (640x640) back to screen pixel deltas
+                _aim_dx = (chosen_tx - 320) * _AIM_SCALE
+                _aim_dy = (chosen_ty - 320) * _AIM_SCALE
             else:
                 _aim_dx = 0.0
                 _aim_dy = 0.0
