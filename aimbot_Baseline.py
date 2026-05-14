@@ -25,7 +25,7 @@ SCREEN_W    = _monitor['width']
 SCREEN_H    = _monitor['height']
 # Increase CAPTURE_SIZE for more range (covers wider area, scaled to 640 for model)
 # 640 = tight center, 960 = ~50% more range, 1280 = ~100% more range
-CAPTURE_SIZE = 960   # wider FoV = detects players at longer range
+CAPTURE_SIZE = min(1280, SCREEN_W, SCREEN_H)  # max FoV without exceeding screen
 CROP_X      = (SCREEN_W - CAPTURE_SIZE) // 2
 CROP_Y      = (SCREEN_H - CAPTURE_SIZE) // 2
 
@@ -71,12 +71,10 @@ def get_frame():
     img = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(CAPTURE_SIZE, CAPTURE_SIZE, 4)
     rgb = img[..., :3][..., ::-1].copy()   # BGRA → RGB
     if CAPTURE_SIZE != 640:
-        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_NEAREST)
-    return rgb
-
+        rgb = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
 # ── Detection + aimbot loop ─────────────────────────────────────────────────────
-DETECT_FPS_ACTIVE = 15          # FPS when aiming (button held)
-DETECT_FPS_IDLE   = 10          # FPS when not aiming (saves CPU/GPU)
+DETECT_FPS_ACTIVE = 12          # FPS when aiming (button held)
+DETECT_FPS_IDLE   = 6           # FPS when not aiming (saves CPU/GPU)
 
 def detection_loop(detect_param):
     global latest_boxes, running
@@ -145,7 +143,7 @@ def main():
     try:
         detect_param = float(sys.argv[1])
     except Exception:
-        detect_param = 0.60
+        detect_param = 0.45
 
     threading.Thread(target=mouse_listener_thread, daemon=True).start()
     threading.Thread(target=keyboard_listener_thread, daemon=True).start()
