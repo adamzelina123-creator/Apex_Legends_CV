@@ -38,7 +38,7 @@ torch.set_num_threads(1)
 torch.set_grad_enabled(False)
 if device == 'cuda':
     torch.backends.cudnn.benchmark = True
-    torch.cuda.set_per_process_memory_fraction(0.30)
+    torch.cuda.set_per_process_memory_fraction(0.10)  # ~600 MB — leaves rest for Apex
 # half precision: .pt on CUDA only; .onnx exported as FP32; .engine has it baked in
 _use_half = device == 'cuda' and _model_path.endswith('.pt')
 
@@ -46,8 +46,8 @@ _use_half = device == 'cuda' and _model_path.endswith('.pt')
 SCREEN_W = ctypes.windll.user32.GetSystemMetrics(0)
 SCREEN_H = ctypes.windll.user32.GetSystemMetrics(1)
 # CAPTURE_SIZE: screen area captured each frame.
-# 640 = no resize (fastest). 960 = 50% more range. 1280 = 100% more range (slower).
-CAPTURE_SIZE = 960
+# 640 = no resize (fastest, least GPU overhead).
+CAPTURE_SIZE = 640
 CROP_X       = (SCREEN_W  - CAPTURE_SIZE) // 2
 CROP_Y       = (SCREEN_H  - CAPTURE_SIZE) // 2
 CENTER       = CAPTURE_SIZE // 2   # centre of the capture in screen pixels
@@ -59,9 +59,13 @@ _region = (CROP_X, CROP_Y, CROP_X + CAPTURE_SIZE, CROP_Y + CAPTURE_SIZE)
 # HEAD_OFFSET: fraction from bbox top → head point (0.0 = very top, 0.15 = mid-upper)
 HEAD_OFFSET = 0.08
 # SNAP_RATIO: fraction of remaining distance covered per aim tick.
-# 1.0 = instant hard snap — jumps directly to head in one tick.
-SNAP_RATIO  = 1.0
+# 0.45 smooths out per-frame bbox noise while still converging in ~3 ticks (~25ms).
+SNAP_RATIO  = 0.45
 AIM_HZ      = 120   # dedicated aim loop frequency
+
+# Detection rate — cap so the GPU has breathing room to render the game
+DETECT_FPS_ACTIVE = 20   # while a button is held
+DETECT_FPS_IDLE   = 4    # background scan
 
 # ── Raw mouse move (works with Apex raw input) ────────────────────────────────
 def raw_move(dx, dy):
@@ -131,6 +135,7 @@ def detection_loop(detect_param):
     print("Model warmed up — ready")
 
     while running:
+        t0 = perf_counter()
         if not aimbot_enabled:
             with _aim_lock:
                 _aim_dx = 0.0
@@ -195,6 +200,12 @@ def detection_loop(detect_param):
             else:
                 _aim_dx = 0.0
                 _aim_dy = 0.0
+
+        # Rate-limit so the GPU has cycles to render the game
+        fps  = DETECT_FPS_ACTIVE if (right_click_pressed or left_click_pressed) else DETECT_FPS_IDLE
+        wait = 1.0 / fps - (perf_counter() - t0)
+        if wait > 0:
+            sleep(wait)
 
 # ── Aim loop ───────────────────────────────────────────────────────────────────
 # Runs at AIM_HZ independent of YOLO speed.  Each tick it covers SNAP_RATIO of
